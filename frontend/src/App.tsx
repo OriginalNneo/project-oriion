@@ -4,7 +4,7 @@
 //   /display     -> Display (HDMI screen, view-only)
 // Query params: ?room=demo&name=alice  (speaker_id defaults to a random handle).
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { QuorumSocket } from "./ws";
 import { useStore } from "./store";
 import { ParticipantView } from "./ParticipantView";
@@ -34,11 +34,12 @@ export default function App() {
   const setConnected = useStore((s) => s.setConnected);
   const reset = useStore((s) => s.reset);
   const [socket, setSocket] = useState<QuorumSocket | null>(null);
-  const startedRef = useRef(false);
 
+  // The effect is fully re-runnable: each run owns one socket, cleanup closes
+  // it. No "ran once" guard — under React 18 StrictMode the dev double-mount
+  // runs effect -> cleanup -> effect, and a guard would leave the second mount
+  // with a closed socket and no way to reconnect (the bug that froze the app).
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
     reset(room);
     const s = new QuorumSocket({
       room,

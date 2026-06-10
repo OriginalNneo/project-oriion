@@ -61,11 +61,13 @@ export class QuorumSocket {
     };
 
     ws.onclose = () => {
+      // A socket closed by its owner stays silent: its owner has already moved
+      // on (e.g. StrictMode's discarded first mount), and a late "disconnected"
+      // here would overwrite the live socket's status.
+      if (this.closedByUser) return;
       this.opts.onStatus?.(false);
-      if (!this.closedByUser) {
-        setTimeout(() => this.connect(), this.backoff);
-        this.backoff = Math.min(this.backoff * 2, 8000);
-      }
+      setTimeout(() => this.connect(), this.backoff);
+      this.backoff = Math.min(this.backoff * 2, 8000);
     };
 
     ws.onerror = () => ws.close();
@@ -79,6 +81,14 @@ export class QuorumSocket {
 
   close(): void {
     this.closedByUser = true;
-    this.ws?.close();
+    const ws = this.ws;
+    if (!ws) return;
+    if (ws.readyState === WebSocket.CONNECTING) {
+      // Closing mid-handshake makes browsers log a scary warning (and is what
+      // StrictMode's dev double-mount does constantly) — let it open, then close.
+      ws.onopen = () => ws.close();
+    } else {
+      ws.close();
+    }
   }
 }
