@@ -86,8 +86,13 @@ export function SketchNode({ spec, status }: { spec: GeometrySpec; status: NodeS
     svg.replaceChildren();
     const rc = rough.svg(svg);
     const color = strokeFor(spec, status);
-    const node = drawShape(rc, spec, color);
-    if (node) svg.appendChild(node);
+    // A "group" is a scene: draw each part (own stroke unless pruned).
+    const shapes = spec.kind === "group" && spec.parts?.length ? spec.parts : [spec];
+    for (const part of shapes) {
+      const partColor = status === "pruned" ? color : strokeFor(part, status);
+      const node = drawShape(rc, part, partColor);
+      if (node) svg.appendChild(node);
+    }
     if (spec.label) {
       const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
       t.setAttribute("x", String(sx(spec.x)));

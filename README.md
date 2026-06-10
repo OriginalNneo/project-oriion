@@ -59,6 +59,7 @@ drives the pipeline. Things the rules classifier understands today:
 | You say | What happens |
 |---|---|
 | "a red circle", "a rectangle with a fillet" | creates a sketch |
+| "a circle with a square on top", "a circle inside a box", "a circle and a triangle" | creates ONE composed scene (stacked / nested / side-by-side) |
 | "how about a triangle instead" | branches a sibling variant off the focus |
 | "make the circle bigger", "make it rounded" | modifies the named node / the focus |
 | "let's go with the triangle", "maybe the box" | focuses + affirms (strength-weighted) |
@@ -66,7 +67,22 @@ drives the pipeline. Things the rules classifier understands today:
 | "scrap the circle", "get rid of that" | prunes a branch |
 | "connect the box to the circle" | draws a workflow edge |
 
-Anything else is a low-confidence NOOP (Phase 4 escalates those to the LLM).
+Anything else is a low-confidence NOOP — **unless the LLM stage is enabled**,
+in which case it escalates there and arbitrary scenes work ("a snowman",
+"a house with a chimney"):
+
+```bash
+# cloud (fast, needs a free key from console.groq.com):
+export QUORUM_LLM_BACKEND=groq QUORUM_GROQ_API_KEY=gsk_...
+# or local/private (needs https://ollama.com installed):
+ollama pull llama3.2:3b
+export QUORUM_LLM_BACKEND=local
+# then restart the backend
+```
+
+The cascade only pays LLM latency when the rules stage is unsure
+(`QUORUM_LLM_ESCALATION_THRESHOLD`, default 0.55); a dead/slow LLM degrades
+back to the rules result instead of breaking the loop.
 
 > **Voice caveats (MVP):** Chrome/Safari only, and the mic needs a **secure
 > context** — `localhost` works out of the box; a phone hitting a LAN IP needs

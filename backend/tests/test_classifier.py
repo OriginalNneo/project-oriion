@@ -159,3 +159,49 @@ async def test_negative_preference_is_negative(clf: RulesClassifier) -> None:
     assert op.op_type == OpType.FOCUS
     assert op.target_node_id == "n2"
     assert op.preference_signal < 0
+
+
+# ---------------------------------------------------------------------- #
+# Composite scenes — multiple shapes in ONE utterance become ONE node.   #
+# ---------------------------------------------------------------------- #
+async def test_scene_square_on_top_of_circle(clf: RulesClassifier) -> None:
+    op = await _classify(clf, "a circle with a square on top")
+    assert op.op_type == OpType.CREATE
+    assert op.geometry is not None and op.geometry.kind == ShapeKind.GROUP
+    parts = {p.kind: p for p in op.geometry.parts}
+    assert set(parts) == {ShapeKind.CIRCLE, ShapeKind.RECTANGLE}
+    # the square sits ABOVE the circle and keeps equal sides
+    square = parts[ShapeKind.RECTANGLE]
+    assert square.y < parts[ShapeKind.CIRCLE].y
+    assert square.width == square.height
+
+
+async def test_scene_on_top_of_phrasing_matches(clf: RulesClassifier) -> None:
+    a = (await _classify(clf, "a circle with a square on top")).geometry
+    b = (await _classify(clf, "a square on top of a circle")).geometry
+    assert a is not None and b is not None
+    assert {(p.kind, p.x, p.y) for p in a.parts} == {(p.kind, p.x, p.y) for p in b.parts}
+
+
+async def test_scene_inside(clf: RulesClassifier) -> None:
+    op = await _classify(clf, "a circle inside a square")
+    assert op.geometry is not None and op.geometry.kind == ShapeKind.GROUP
+    parts = {p.kind: p for p in op.geometry.parts}
+    inner, outer = parts[ShapeKind.CIRCLE], parts[ShapeKind.RECTANGLE]
+    assert inner.x == outer.x and inner.y == outer.y
+    assert inner.width < outer.width
+
+
+async def test_scene_side_by_side_default(clf: RulesClassifier) -> None:
+    op = await _classify(clf, "a circle and a triangle")
+    assert op.geometry is not None and op.geometry.kind == ShapeKind.GROUP
+    circle = next(p for p in op.geometry.parts if p.kind == ShapeKind.CIRCLE)
+    triangle = next(p for p in op.geometry.parts if p.kind == ShapeKind.TRIANGLE)
+    assert circle.x < triangle.x  # spoken order, left to right
+
+
+async def test_scene_branches_off_focus_with_hint(clf: RulesClassifier) -> None:
+    op = await _classify(clf, "how about a circle with a square on top instead", focus="n1")
+    assert op.op_type == OpType.BRANCH
+    assert op.target_node_id == "n1"
+    assert op.geometry is not None and op.geometry.kind == ShapeKind.GROUP

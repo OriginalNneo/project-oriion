@@ -55,6 +55,10 @@ def _round_rect_path(x: float, y: float, w: float, h: float, r: float) -> str:
 
 def _shape_body(spec: GeometrySpec) -> str:
     """Render just the shape element(s) for ``spec`` (no <svg> wrapper)."""
+    if spec.kind is ShapeKind.GROUP:
+        # A scene: parts carry absolute coords in the same 0..100 box.
+        return "".join(_shape_body(part) for part in spec.parts)
+
     cx, cy = _sx(spec.x), _sy(spec.y)
     w = spec.width / 100.0 * _SPAN
     h = spec.height / 100.0 * _SPAN

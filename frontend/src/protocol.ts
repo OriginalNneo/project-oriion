@@ -9,6 +9,7 @@ export type ShapeKind =
   | "triangle"
   | "ellipse"
   | "line"
+  | "group"
   | "node"
   | "edge";
 
@@ -25,6 +26,8 @@ export interface GeometrySpec {
   label: string | null;
   stroke: string;
   fill: string | null;
+  // "group" scenes: positioned primitives sharing the same 0..100 box.
+  parts: GeometrySpec[];
 }
 
 export interface NodeView {

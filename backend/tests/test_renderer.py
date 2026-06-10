@@ -40,6 +40,20 @@ def test_every_shape_renders_without_error() -> None:
         assert "<svg" in out
 
 
+def test_group_renders_all_parts() -> None:
+    r = SvgRenderer()
+    scene = GeometrySpec(
+        kind=ShapeKind.GROUP,
+        parts=[
+            GeometrySpec(kind=ShapeKind.CIRCLE, x=50, y=66, width=34, height=34),
+            GeometrySpec(kind=ShapeKind.RECTANGLE, x=50, y=32, width=24, height=24),
+        ],
+    )
+    out = r.render(scene)
+    assert "<circle" in out and "<path" in out  # both primitives in ONE svg
+    assert r.render(scene) == out  # still deterministic/cacheable
+
+
 def test_label_is_escaped() -> None:
     r = SvgRenderer()
     out = r.render(GeometrySpec(kind=ShapeKind.NODE, label="<a & b>"))

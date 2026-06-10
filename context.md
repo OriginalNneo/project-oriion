@@ -26,6 +26,21 @@ vite build); fast path p95 0.072 ms.
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Composite scenes + LLM stage (cascade stage C).** "a circle with a square
+  on top" was collapsing to one shape — root cause: a node's geometry could
+  only hold ONE primitive. Now:
+  - `GeometrySpec` gains `kind=group` + `parts` (absolute coords in the same
+    0..100 box; no nested transforms). Renderer, client renderer, and
+    `apply_modifiers` (scale-around-center for groups) all handle it.
+  - Rules classifier composes 2+ shape mentions with spatial prepositions:
+    on top/above, below/under, inside, else side-by-side in spoken order.
+    One utterance = one idea node = possibly many primitives.
+  - `pipeline/llm.py` — the real stage C behind the same `Classifier`
+    Protocol: Groq (JSON mode) or Ollama (`format:json`), strict pydantic
+    validation, any failure → zero-confidence NOOP. `CascadeClassifier`
+    escalates only when rules are unsure (threshold env-tunable); a dead LLM
+    falls back to rules (tested). `build_classifier()` factory wires it from
+    `QUORUM_LLM_BACKEND` (default mock = rules only). 54 backend tests.
 - **Fix: StrictMode dev double-mount froze the app.** The connect effect's
   "ran once" guard left mount #2 with a closed socket → UI rendered but dead
   (and the mic looked broken — utterances dropped into a dead socket). Gotcha
@@ -118,6 +133,8 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-10 | "the \<shape\>" (definite article) = reference to an existing node; "a \<shape\>" = create | Cheap, deterministic discriminator that fixed "make the circle bigger" creating a second circle. LLM stage will handle the long tail |
 | 2026-06-10 | Modifier vocabulary (`fillet`, `radius:N`, `bigger`, `color:<hex>`…) folds in `domain/geometry.apply_modifiers` | Classifier and engine were drifting toward two interpretations of the same words; one domain function, used by both, behind no stage's internals |
 | 2026-06-10 | Replay is a tested API (`DesignStateEngine.from_events`) | Event sourcing buys nothing if the fold is never exercised; also forced the missing FOCUS_CHANGED event on prune-reassignment into the log |
+| 2026-06-10 | A sketch is a *scene*: `GeometrySpec(kind=group, parts=[...])`, parts in absolute 0..100 coords, no nested transforms | "circle with a square on top" is ONE idea node, not two cards; absolute coords keep both renderers and caching trivial. Caught live: multi-shape utterances collapsed to one shape |
+| 2026-06-10 | LLM stage C = Groq/Ollama emitting the same strict-JSON DesignOp+GeometrySpec; cascade escalates only below a confidence threshold; LLM failure → fall back to rules | Plan §3.3 realized: median latency stays rules-fast, complex scenes ("a snowman") become possible, and a dead LLM degrades quality, never availability |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -145,8 +162,8 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 |---|---|---|---|
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
-| Classify (fast) | <0.2 s | **0.02 ms / 0.03 ms** | rules stage incl. new prune/connect/color/named-modify paths |
-| Classify (LLM) | <1.5 s local | — | Phase 4 |
+| Classify (fast) | <0.2 s | **0.02 ms / 0.03 ms** | rules stage incl. scenes/prune/connect/colors |
+| Classify (LLM) | <1.5 s local / <0.8 s Groq | — (built, off by default) | `classify_llm` ledger row fills in once `QUORUM_LLM_BACKEND` is set |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
 | Engine apply | (internal) | **0.03 ms / 0.04 ms** | DAG mutation + event append (incl. new focus/diff bookkeeping) |
 | **End-to-end (server fast path)** | **<5 s** | **0.053 ms / 0.072 ms** | classify+engine+render; the budget is effectively all browser-STT/LLM headroom |

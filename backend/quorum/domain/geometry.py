@@ -25,6 +25,9 @@ class ShapeKind(StrEnum):
     TRIANGLE = "triangle"
     ELLIPSE = "ellipse"
     LINE = "line"
+    # A composed scene: several positioned primitives in ONE sketch
+    # ("a circle with a square on top" is one idea node, not two).
+    GROUP = "group"
     # workflow-mode primitives (Phase 2+): a labelled box and a connector
     NODE = "node"
     EDGE = "edge"
@@ -53,6 +56,9 @@ class GeometrySpec(BaseModel):
     # Stroke/fill hints — kept minimal; the low-fi look is the renderer's job.
     stroke: str = "#1f2937"
     fill: str | None = None
+    # GROUP only: the composed primitives, each positioned in the SAME 0..100
+    # box (absolute coords, no nesting transforms — keeps renderers trivial).
+    parts: list[GeometrySpec] = Field(default_factory=list)
 
     def cache_key(self) -> str:
         """Stable key for SVG render caching (RULES.md §6: cache repeated geometry)."""
@@ -69,6 +75,34 @@ def apply_modifiers(geom: GeometrySpec, modifiers: list[str]) -> GeometrySpec:
     Supported: ``fillet``/``rounded``, ``radius:<n>``, ``bigger``, ``smaller``,
     ``color:<css-color>``.
     """
+    if geom.kind is ShapeKind.GROUP and geom.parts:
+        # Scenes scale around the box center so parts keep their arrangement;
+        # non-size modifiers (color, fillet) recurse into every part.
+        scale = 1.0
+        rest: list[str] = []
+        for mod in modifiers:
+            m = mod.strip().lower()
+            if m == "bigger":
+                scale *= 1.3
+            elif m == "smaller":
+                scale *= 0.7
+            else:
+                rest.append(mod)
+        parts = []
+        for part in geom.parts:
+            p = apply_modifiers(part, rest)
+            if scale != 1.0:
+                p = p.model_copy(
+                    update={
+                        "x": min(100.0, max(0.0, 50.0 + (p.x - 50.0) * scale)),
+                        "y": min(100.0, max(0.0, 50.0 + (p.y - 50.0) * scale)),
+                        "width": min(100.0, max(1.0, p.width * scale)),
+                        "height": min(100.0, max(1.0, p.height * scale)),
+                    }
+                )
+            parts.append(p)
+        return geom.model_copy(update={"parts": parts})
+
     updates: dict[str, float | str] = {}
     for mod in modifiers:
         m = mod.strip().lower()
