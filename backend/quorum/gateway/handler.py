@@ -30,7 +30,7 @@ from quorum.gateway.connection import Connection
 from quorum.gateway.rooms import Room
 from quorum.observability import get_logger
 from quorum.observability.latency import stage_timer
-from quorum.pipeline.classify import RulesClassifier, demo_op_to_designop
+from quorum.pipeline.classify import build_classifier, demo_op_to_designop
 
 _log = get_logger("gateway.handler")
 _client_adapter: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -41,8 +41,8 @@ class MessageHandler:
 
     def __init__(self, room: Room) -> None:
         self.room = room
-        # Phase 0/1 classifier is the rules stage; swapped by config in Phase 4.
-        self.classifier = RulesClassifier()
+        # Rules-only by default; rules+LLM cascade when QUORUM_LLM_BACKEND is set.
+        self.classifier = build_classifier()
         self._utterance_seq = 0
 
     def _next_utterance_id(self, speaker_id: str) -> str:

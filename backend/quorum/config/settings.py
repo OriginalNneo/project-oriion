@@ -43,12 +43,20 @@ class Settings(BaseSettings):
     # (plan.md §5). Tunable without touching code.
     vad_silence_ms: int = Field(default=300, ge=50, le=2000)
 
+    # LLM cascade escalation: rules results below this confidence go to the LLM
+    # stage (when one is configured). Higher = fewer LLM calls = lower median
+    # latency, at some accuracy cost (RULES.md §6 tuning lever #3).
+    llm_escalation_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
+    llm_timeout_s: float = Field(default=8.0, gt=0, le=60)
+
     # --- Local model selection (only consulted when a backend is LOCAL) ---
     whisper_model: str = "small"
     ollama_model: str = "llama3.2:3b"
+    ollama_url: str = "http://localhost:11434"
 
     # --- Cloud creds (only required when a backend is GROQ) ---
     groq_api_key: str | None = None
+    groq_model: str = "llama-3.1-8b-instant"
 
     # --- Server ---
     host: str = "0.0.0.0"
