@@ -32,7 +32,8 @@ export function ParticipantView({ socket, speakerId }: { socket: QuorumSocket; s
   const connected = useStore((s) => s.connected);
   const transcript = useStore((s) => s.transcript);
 
-  const voiceSupported = VoiceInput.isSupported();
+  const voiceUnavailable = VoiceInput.unavailableReason();
+  const voiceSupported = voiceUnavailable === null;
   const voiceRef = useRef<VoiceInput | null>(null);
   if (voiceRef.current === null && voiceSupported) {
     voiceRef.current = new VoiceInput({
@@ -88,7 +89,7 @@ export function ParticipantView({ socket, speakerId }: { socket: QuorumSocket; s
             className={`mic${listening ? " on" : ""}`}
             onClick={toggleMic}
             disabled={!voiceSupported}
-            title={voiceSupported ? "toggle voice input" : "voice needs Chrome/Safari + a secure origin"}
+            title={voiceUnavailable ?? "toggle voice input"}
           >
             {listening ? "● listening — tap to stop" : "🎤 Speak"}
           </button>
@@ -99,9 +100,7 @@ export function ParticipantView({ socket, speakerId }: { socket: QuorumSocket; s
                 ? `“${interim}…”`
                 : listening
                   ? "say a shape, a change, or a preference"
-                  : voiceSupported
-                    ? ""
-                    : "voice unavailable here — use the text box"}
+                  : (voiceUnavailable ?? "")}
           </span>
         </div>
 
