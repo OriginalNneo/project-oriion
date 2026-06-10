@@ -11,7 +11,7 @@ internals (RULES.md §2) — it produces or consumes one of these typed objects.
 """
 
 from quorum.domain.events import DesignEvent, EventType
-from quorum.domain.geometry import GeometrySpec, ShapeKind
+from quorum.domain.geometry import GeometrySpec, ShapeKind, apply_modifiers
 from quorum.domain.messages import (
     ClientMessage,
     NodeView,
@@ -36,4 +36,5 @@ __all__ = [
     "ShapeKind",
     "StateDiff",
     "TreeSnapshot",
+    "apply_modifiers",
 ]

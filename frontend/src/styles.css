@@ -133,10 +133,47 @@ button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
+.voice-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.mic {
+  flex: 0 0 auto;
+  min-width: 130px;
+}
+.mic.on {
+  background: #b91c1c;
+  animation: mic-pulse 1.6s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(248, 113, 113, 0);
+  }
+}
+.interim {
+  color: var(--accent-2);
+  font-size: 0.9rem;
+  font-style: italic;
+  min-height: 1.2em;
+}
+.manual {
+  margin-top: 12px;
+  color: var(--muted);
+}
+.manual summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  margin-bottom: 8px;
+}
 .say {
   display: flex;
   gap: 8px;
-  margin-top: 12px;
 }
 .say input {
   flex: 1;
@@ -179,14 +216,24 @@ button:disabled {
 }
 
 /* ---------------- Idea tree ---------------- */
-.idea-tree {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  align-content: flex-start;
-  justify-content: center;
+.idea-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+}
+.idea-canvas {
+  position: relative;
+  margin: auto;
+}
+.idea-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 .node-card {
+  position: absolute;
   background: var(--card);
   border-radius: 16px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
@@ -194,6 +241,8 @@ button:disabled {
   flex-direction: column;
   overflow: hidden;
   transition:
+    left 0.35s,
+    top 0.35s,
     transform 0.35s,
     box-shadow 0.35s,
     outline-color 0.35s;

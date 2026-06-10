@@ -43,9 +43,9 @@ class MonotonicCounter:
     of the same event log, which matters for event sourcing and tests.
     """
 
-    def __init__(self, prefix: str = "n") -> None:
+    def __init__(self, prefix: str = "n", start: int = 0) -> None:
         self._prefix = prefix
-        self._i = 0
+        self._i = start
 
     def next(self) -> str:
         self._i += 1

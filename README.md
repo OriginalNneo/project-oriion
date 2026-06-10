@@ -50,6 +50,31 @@ Open the **Display** view fullscreen on the HDMI'd laptop:
 Open the **Participant** view on each phone:
 `http://<LAN-IP>:5173/?room=demo`
 
+## Using your voice (the MVP path)
+
+Tap **🎤 Speak** in the Participant view and talk. The browser's speech
+recognition (Web Speech API) endpoints your utterance and the final transcript
+drives the pipeline. Things the rules classifier understands today:
+
+| You say | What happens |
+|---|---|
+| "a red circle", "a rectangle with a fillet" | creates a sketch |
+| "how about a triangle instead" | branches a sibling variant off the focus |
+| "make the circle bigger", "make it rounded" | modifies the named node / the focus |
+| "let's go with the triangle", "maybe the box" | focuses + affirms (strength-weighted) |
+| "not the triangle" | dis-affirms; twice rejects it off the board |
+| "scrap the circle", "get rid of that" | prunes a branch |
+| "connect the box to the circle" | draws a workflow edge |
+
+Anything else is a low-confidence NOOP (Phase 4 escalates those to the LLM).
+
+> **Voice caveats (MVP):** Chrome/Safari only, and the mic needs a **secure
+> context** — `localhost` works out of the box; a phone hitting a LAN IP needs
+> HTTPS (e.g. `vite --https` + a local cert) or Chrome's
+> `chrome://flags/#unsafely-treat-insecure-origin-as-secure` flag. The text box
+> is the always-works fallback, and Phase 1b moves STT server-side (Silero VAD +
+> faster-whisper) behind the same protocol, removing the browser dependency.
+
 ## Configuration (12-factor — all via env)
 
 | Var | Default | Meaning |
@@ -75,5 +100,7 @@ uv run pytest -m latency            # latency benchmarks (first-class tests)
 
 ## Status
 
-Phase 0 — Skeleton: React client ↔ FastAPI WS ↔ hardcoded SVG renders on the
-Display view. See `context.md` for the live state.
+Phase 1a — **Voice MVP built** (see `plan.md` §1.1 for the MVP definition):
+speak → intent → branching idea tree with visible derivation edges → shared
+display, multi-user over LAN. Awaiting live-mic review; Phase 1b (server-side
+STT) is next. See `context.md` for the live state.

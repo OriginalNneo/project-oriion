@@ -57,3 +57,36 @@ class GeometrySpec(BaseModel):
     def cache_key(self) -> str:
         """Stable key for SVG render caching (RULES.md §6: cache repeated geometry)."""
         return self.model_dump_json()
+
+
+def apply_modifiers(geom: GeometrySpec, modifiers: list[str]) -> GeometrySpec:
+    """Fold textual modifiers into a geometry spec — the one shared vocabulary.
+
+    Both the classifier (resolving a CREATE's geometry) and the engine (MODIFYing
+    an existing node) fold the same modifier strings the same way; keeping this in
+    the domain stops the two stages from drifting or reaching into each other.
+
+    Supported: ``fillet``/``rounded``, ``radius:<n>``, ``bigger``, ``smaller``,
+    ``color:<css-color>``.
+    """
+    updates: dict[str, float | str] = {}
+    for mod in modifiers:
+        m = mod.strip().lower()
+        if m in ("fillet", "rounded"):
+            updates["corner_radius"] = max(geom.corner_radius, 12.0)
+        elif m.startswith("radius:"):
+            try:
+                updates["corner_radius"] = min(50.0, max(0.0, float(m.split(":", 1)[1])))
+            except ValueError:
+                pass
+        elif m == "bigger":
+            updates["width"] = min(100.0, geom.width * 1.3)
+            updates["height"] = min(100.0, geom.height * 1.3)
+        elif m == "smaller":
+            updates["width"] = max(4.0, geom.width * 0.7)
+            updates["height"] = max(4.0, geom.height * 0.7)
+        elif m.startswith("color:"):
+            color = m.split(":", 1)[1].strip()
+            if color:
+                updates["stroke"] = color
+    return geom.model_copy(update=updates) if updates else geom

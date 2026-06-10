@@ -36,3 +36,4 @@ models/
 .idea/
 .vscode/
 *.swp
+*.tsbuildinfo

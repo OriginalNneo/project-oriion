@@ -5,22 +5,55 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-10  ·  **Current phase:** Phase 0 — Skeleton ✅ (done; ready for Phase 1 review)
+> **Last updated:** 2026-06-10  ·  **Current phase:** Phase 1a — Voice MVP ✅ (built; ready for live-mic review)
 
 ---
 
 ## 1. One-line status
-**Phase 0 complete and demoable.** React client ↔ FastAPI WebSocket ↔ engine ↔
-SVG renderer ↔ broadcast loop runs end to end, verified live over a real socket.
-All checks green (ruff, mypy strict, 34 backend tests, tsc, vite build).
+**Voice MVP (plan.md §1.1) built end to end.** Mic toggle → browser speech →
+`utterance` → hardened rules classifier → engine → idea tree *with derivation
+edges* → display. All checks green (ruff, mypy strict, 43 backend tests, tsc,
+vite build); fast path p95 0.072 ms.
 
 ## 2. Current focus
 - [x] Phase 0: prove the loop — participant client → WS → Design State Engine →
       SVG render → diff broadcast → both Participant and Display views update.
-- [ ] **Review checkpoint** (RULES.md §3): human review before starting Phase 1.
+- [x] Phase 1a: the MVP — voice input (Web Speech API), classifier vocabulary
+      (create/branch/modify/focus/prune/connect/colors), tree layout with
+      derivation edges, engine event-sourcing fixes + replay.
+- [ ] **Review checkpoint** (RULES.md §3): human review **with a real mic on
+      localhost Chrome** before Phase 1b/2 (agent cannot exercise a microphone).
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Phase 1a — the Voice MVP (plan.md §1.1).** Five segments, all checks green:
+  - **Voice input** — `frontend/src/speech.ts`: Web Speech API wrapper
+    (continuous, interim results, auto-restart after browser silence cutoff,
+    feature-detected). Mic toggle + live interim line in ParticipantView; final
+    utterances flow into the *existing* `utterance` path — zero protocol change.
+    Server STT (Phase 1b) replaces it behind the same wire contract.
+  - **Classifier hardened** (`RulesClassifier`, ex-`MockClassifier`): prune
+    ("scrap the circle", "get rid of that"), connect ("connect the box to the
+    circle"), modify-named ("make the circle bigger" now MODIFYs — it used to
+    CREATE a second circle; the definite article is the discriminator), spoken
+    colors → `color:<hex>` modifier → spec stroke, negative preference ("not
+    the triangle") emits a negative signal.
+  - **Engine correctness** — prune is now an *upsert* with `status=pruned`
+    (diffs match snapshots; clients fade instead of delete); focus reassignment
+    after prune is event-logged and the new focus's view rides the same diff;
+    negative `preference_signal` *disaffirms* (lowers score, never focuses —
+    two rejections sink a node past the prune floor); first-node event snapshot
+    status fixed; `connect` keeps `children_ids` consistent.
+  - **Replay made real** — `DesignStateEngine.from_events()` folds the event
+    log back into state; test asserts live == replayed (nodes, focus, seq) and
+    id-counter resume. Event sourcing is now a tested guarantee, not a claim.
+  - **Idea tree is a tree** — depth-column layout, SVG derivation curves
+    parent→child, workflow `edge` nodes drawn as dashed connector lines (not
+    cards), pruned branches faded (participant) / hidden (display).
+  - Shared `apply_modifiers()` moved to `domain/geometry.py` (classifier and
+    engine fold the same vocabulary; `radius:N` now actually lands in CREATE
+    geometry). Client store takes `diff.focus_node_id` as authoritative
+    (stale-focus bug). 43 backend tests (was 34).
 - **Phase 0 skeleton — the loop is proven.** Modular monolith stood up with every
   pipeline seam already behind a `Protocol` so Phases 1–4 slot in, not rewrite:
   - `domain/` — shared contracts: `GeometrySpec`, `DesignOp` (+ `ClassifierContext`/
@@ -48,12 +81,13 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
-1. **Phase 1 — single-mic E2E:** add the real audio path behind the existing
-   Protocols: client mic capture (Web Audio → 16 kHz PCM over WS) → Silero VAD/
-   endpointing (`VAD`) → faster-whisper STT (`Transcriber`) → the rules classifier
-   (already built) → engine → render. Wire `QUORUM_STT_BACKEND=local`.
-2. Extend the latency harness with the real STT/VAD timings; record to §7.
-3. Phase 2 — idea tree polish (branch layout, affirmation/prune already in engine).
+1. **Live-mic review:** a human runs the MVP on localhost Chrome (and a phone
+   if HTTPS/flag is set up), speaks the §1.1 vocabulary, sanity-checks the tree.
+2. **Phase 1b — server STT:** client mic capture (Web Audio → 16 kHz PCM over
+   WS) → Silero VAD (`VAD`) → faster-whisper (`Transcriber`) → same tail. Wire
+   `QUORUM_STT_BACKEND=local`; extend the latency harness with STT/VAD rows.
+3. Phase 2 — idea tree polish (smarter sibling layout, label nodes, undo via
+   the now-tested event log).
 
 ## 5. Decisions log
 _(why we chose what — so we don't relitigate it)_
@@ -72,12 +106,21 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-10 | Classifier takes a read-only `ClassifierContext` (focus + candidate NodeRefs), not just `focus_node_id` | Lets the rules stage resolve a *named* preference ("go with the triangle") to a node; same context feeds the Phase-4 LLM for relational intent. Caught live: bare focus_node_id mis-focused. Engine stays sole state owner. |
 | 2026-06-10 | Engine uses injectable Clock + MonotonicCounter (no `time()`/uuid inline) | Deterministic ids/timestamps → replayable event log + testable engine |
 | 2026-06-10 | Per-room asyncio lock around engine.apply; broadcast fan-out outside the lock | Serializes the single writer (RULES.md §5) without serializing slow client I/O; rooms are independent |
+| 2026-06-10 | MVP voice = browser Web Speech API (client-side STT), server VAD/whisper deferred to Phase 1b | Real voice today with zero server ML deps and zero protocol change; the browser already does capture+endpointing+STT. Caveat: Chrome/Safari + secure context (localhost or HTTPS) — acceptable for MVP, and 1b removes it |
+| 2026-06-10 | Prune = upsert with `status=pruned`, not `removed_ids` | Diffs and snapshots must say the same thing; late joiners saw faded cards while live clients deleted them. `removed_ids` reserved for future hard deletes |
+| 2026-06-10 | Negative preference signal *disaffirms* (engine lowers score; never focuses) | "not the triangle" used to FOCUS the triangle with a bump — the exact opposite of intent. Two −0.6 rejections now sink a node past the −0.8 prune floor |
+| 2026-06-10 | "the \<shape\>" (definite article) = reference to an existing node; "a \<shape\>" = create | Cheap, deterministic discriminator that fixed "make the circle bigger" creating a second circle. LLM stage will handle the long tail |
+| 2026-06-10 | Modifier vocabulary (`fillet`, `radius:N`, `bigger`, `color:<hex>`…) folds in `domain/geometry.apply_modifiers` | Classifier and engine were drifting toward two interpretations of the same words; one domain function, used by both, behind no stage's internals |
+| 2026-06-10 | Replay is a tested API (`DesignStateEngine.from_events`) | Event sourcing buys nothing if the fold is never exercised; also forced the missing FOCUS_CHANGED event on prune-reassignment into the log |
 
 ## 6. Open questions
-- Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Partially
-  settled:_ rules classifier now scores by phrase strength (`_PREFERENCE_PHRASES`
-  in `classify.py`): "let's go with"=1.0, "i prefer"=0.9, "maybe the"=0.3,
-  "not the"=-0.6. Refine these once we have real sessions.
+- Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
+  settled:_ phrase-strength table in `classify.py` (+ negative phrases now
+  *disaffirm* in the engine rather than focus). Refine weights with real
+  sessions.
+- Browser speech recognizer quality on design vocabulary ("fillet" especially)
+  — evaluate at the live-mic review; if it mangles jargon badly, Phase 1b
+  (whisper + keyterm biasing) moves up the queue.
 - Explicit verbal "commit/lock" command needed? (Still open; engine has `focus`
   but no hard lock — a high-affirmation focus is the current proxy.)
 - Workflow mode: shared renderer with geometry mode or separate? _Leaning shared:_
@@ -90,20 +133,23 @@ _(why we chose what — so we don't relitigate it)_
 
 ## 7. Latency ledger
 _(measured numbers go here as soon as we have them — never guess once we can measure)_
-_Phase 0 measured via `pytest -m latency` harness (200 iters, MacBook, mock backends — no STT/LLM yet)._
+_Phase 1a measured via `pytest -m latency` harness (200 iters, MacBook, expanded
+corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 | Stage | Target | Measured (p50 / p95) | Notes |
 |---|---|---|---|
-| Endpointing | 0.2–0.5 s | — | Phase 1 (VAD) |
-| STT | <1 s | — | Phase 1 (faster-whisper) |
-| Classify (fast) | <0.2 s | **0.02 ms / 0.03 ms** | rules stage only; well under budget |
+| Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
+| STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
+| Classify (fast) | <0.2 s | **0.02 ms / 0.03 ms** | rules stage incl. new prune/connect/color/named-modify paths |
 | Classify (LLM) | <1.5 s local | — | Phase 4 |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
-| Engine apply | (internal) | **0.04 ms / 0.05 ms** | DAG mutation + event append |
-| **End-to-end (common)** | **<5 s** | **0.058 ms / 0.089 ms** | fast path only (classify+engine+render); STT/LLM budget still free |
+| Engine apply | (internal) | **0.03 ms / 0.04 ms** | DAG mutation + event append (incl. new focus/diff bookkeeping) |
+| **End-to-end (server fast path)** | **<5 s** | **0.053 ms / 0.072 ms** | classify+engine+render; the budget is effectively all browser-STT/LLM headroom |
 
-> Read-back: the existing fast-path tail is ~3–4 orders of magnitude under the
-> 5 s budget, so the whole budget is available for STT/VAD/LLM when they land.
-> Live `/metrics/latency` confirmed the same numbers over a real WS session.
+> Read-back: the server-side fast path stayed ~4 orders of magnitude under the
+> 5 s budget after the classifier/engine work (no regression — actually faster
+> than the Phase 0 numbers). In 1a the real human-perceived latency is the
+> browser's own speech recognizer (typically 0.5–1.5 s after end of speech),
+> which only a live-mic session can measure — first item in the queue.
 
 ## 8. Glossary
 - **DesignOp** — the structured intent object the classifier emits (see plan §3.3).
@@ -129,6 +175,9 @@ npm install
 npm run dev                                # Vite on 0.0.0.0:5173, proxies /ws -> :8000
 #   Participant (phone):  http://<LAN-IP>:5173/?room=demo&name=alice
 #   Display (HDMI):       http://<LAN-IP>:5173/display?room=demo
+# Voice (MVP path): tap the mic. Needs Chrome/Safari AND a secure context —
+#   localhost just works; a phone on the LAN IP needs HTTPS (or Chrome's
+#   "unsafely-treat-insecure-origin-as-secure" flag). Text box is the fallback.
 
 # --- checks (per RULES.md §3) ---
 cd backend && uv run ruff check . && uv run mypy quorum tests \
@@ -141,11 +190,13 @@ cd frontend && npm run typecheck && npm run build
 # QUORUM_GROQ_API_KEY=...              QUORUM_WHISPER_MODEL=small
 ```
 
-## 10. Phase 1 entry notes (for next session)
-- The classifier, engine, renderer, broadcast, and the `UtteranceMessage` path
-  already work — Phase 1 only adds the *front* of the pipeline (mic → VAD → STT),
-  feeding text into the existing `_on_utterance` handler. No tail changes.
+## 10. Phase 1b entry notes (for next session)
+- Voice already works end to end via the browser (1a); 1b adds the *server*
+  audio path for privacy/offline: mic PCM (`AudioMessage`, already in the wire
+  protocol, currently a no-op) → Silero VAD → faster-whisper, feeding the same
+  `_on_utterance` tail. No tail changes, no client protocol changes.
 - New impls go behind `pipeline/interfaces.py` (`VAD`, `Transcriber`); select via
-  `QUORUM_VAD_BACKEND` / `QUORUM_STT_BACKEND`. Add their `stage_timer(...)` calls
-  so the ledger fills in the empty rows automatically.
-- `AudioMessage` is already in the wire protocol (accepted, currently a no-op).
+  `QUORUM_VAD_BACKEND` / `QUORUM_STT_BACKEND` (`uv sync --extra local`). Add
+  their `stage_timer(...)` calls so the ledger fills the empty rows automatically.
+- The classifier is shared by both paths — no work needed there.
+- Undo is now cheap if wanted: `DesignStateEngine.from_events(events[:-k])`.

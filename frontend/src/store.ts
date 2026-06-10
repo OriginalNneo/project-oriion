@@ -72,7 +72,9 @@ export const useStore = create<QuorumState>((set) => ({
           return {
             nodes,
             seq: msg.diff.seq,
-            focusNodeId: msg.diff.focus_node_id ?? state.focusNodeId,
+            // The server's focus is authoritative — null means "no focus",
+            // so don't fall back to the stale local value.
+            focusNodeId: msg.diff.focus_node_id,
           };
         }
         case "transcript": {

@@ -4,10 +4,16 @@
 > decision — fitting for a tool whose whole job is helping a group of voices
 > converge on a shared design). Rename freely.
 
-> **Status:** Planning / pre-build. This document is the source of truth for
-> *what we are building and why*. Day-to-day state lives in `context.md`.
-> Build discipline lives in `RULES.md`. The agent's operating instructions
-> live in `CLAUDE.md`.
+> **Status:** Building. This document is the source of truth for *what we are
+> building and why*. Day-to-day state lives in `context.md`. Build discipline
+> lives in `RULES.md`. The agent's operating instructions live in `CLAUDE.md`.
+>
+> **Change log** (RULES.md §7 — design-intent changes only):
+> - 2026-06-10 — added §1.1 (explicit MVP definition) and split Phase 1 into a
+>   browser-voice MVP track (1a) and a server-STT track (1b). Reason: "prove the
+>   loop" was defined, but "what is the shippable MVP" was not; and the Web
+>   Speech API gives a real voice path with zero server ML deps, behind the
+>   *same* wire protocol the server STT will use.
 
 ---
 
@@ -30,6 +36,36 @@ bottleneck: the conversation *is* the input device.
   triangle" → the system focuses that branch.
 - **Workflow mode:** people describe a system/process out loud; nodes and arrows
   assemble live, no one has to stop and drag boxes.
+
+### 1.1 The MVP — definition of done
+
+The MVP is the smallest version a real group can actually *use* in a real
+design conversation. It is done when all of these hold in one live session:
+
+1. **Voice in.** A participant opens the web app on their own device, taps the
+   mic, and speaks. No typing required for the happy path. (MVP voice = the
+   browser's Web Speech API doing capture/endpointing/STT client-side, emitting
+   final utterances over the existing `utterance` message — the server-side
+   VAD + faster-whisper path is an *upgrade* behind the same protocol, not a
+   prerequisite.)
+2. **Intent out.** The rules classifier handles the core spoken vocabulary:
+   create ("a red circle"), branch ("how about a triangle instead"), modify
+   ("make the circle bigger"), preference ("let's go with the triangle",
+   "not the triangle"), prune ("scrap the circle"), connect ("connect the box
+   to the circle").
+3. **A visible idea tree.** Derivation edges are drawn — variants visibly hang
+   off the idea they came from; the focused branch is emphasized; rejected
+   branches fade.
+4. **Multi-user.** N participants + 1 display join the same room over the LAN;
+   everyone sees the same tree update live; speaker attribution shows on each
+   node.
+5. **Trust loop.** Each utterance echoes back as a visible transcript line, and
+   a text box doubles as the correction path.
+6. **Inside budget.** End-to-end < 5 s common case, measured by the harness and
+   the live `/metrics/latency` ledger.
+
+Out of scope for the MVP (and explicitly so): server-side STT, the embedding/
+LLM classifier stages, persistence beyond a session, auth, cloud deployment.
 
 ---
 
@@ -260,7 +296,8 @@ Both sit comfortably inside the 5–15 s target, with room to spare.
 | Phase | Goal | Done when… |
 |---|---|---|
 | **0 — Skeleton** | Prove the loop | React client ↔ FastAPI WS ↔ hardcoded SVG renders on screen |
-| **1 — Single-mic E2E** | One real path | MacBook mic → VAD → faster-whisper → rules classifier → SVG → display |
+| **1a — Voice MVP (browser STT)** | The §1.1 MVP | Mic toggle → Web Speech API → `utterance` → rules classifier → idea tree w/ derivation edges, multi-user |
+| **1b — Server STT** | Privacy/offline voice | Client PCM over WS → Silero VAD → faster-whisper, same protocol, `QUORUM_STT_BACKEND=local` |
 | **2 — Idea tree** | Branching + preference | DAG variant spawning, affirmation scoring, focus/prune working |
 | **3 — Multi-client (LAN)** | Concurrency | Phones join by IP, each own mic/session, N streams process in parallel, shared display |
 | **4 — Classifier upgrade** | Robustness + speed | Embedding stage + LLM stage + speculative parallelism |

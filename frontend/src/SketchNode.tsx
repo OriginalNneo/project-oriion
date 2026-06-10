@@ -14,15 +14,10 @@ const SPAN = VIEW - 2 * MARGIN;
 const sx = (x: number) => MARGIN + (x / 100) * SPAN;
 const sy = (y: number) => MARGIN + (y / 100) * SPAN;
 
-function statusColor(status: NodeStatus): string {
-  switch (status) {
-    case "focused":
-      return "#2563eb"; // emphasized
-    case "pruned":
-      return "#cbd5e1"; // faded
-    default:
-      return "#334155";
-  }
+// Stroke comes from the spec (spoken colors land there via the classifier);
+// pruned nodes fade regardless. Focus emphasis is the card outline's job.
+function strokeFor(spec: GeometrySpec, status: NodeStatus): string {
+  return status === "pruned" ? "#cbd5e1" : spec.stroke || "#334155";
 }
 
 function drawShape(
@@ -90,7 +85,7 @@ export function SketchNode({ spec, status }: { spec: GeometrySpec; status: NodeS
     if (!svg) return;
     svg.replaceChildren();
     const rc = rough.svg(svg);
-    const color = statusColor(status);
+    const color = strokeFor(spec, status);
     const node = drawShape(rc, spec, color);
     if (node) svg.appendChild(node);
     if (spec.label) {
