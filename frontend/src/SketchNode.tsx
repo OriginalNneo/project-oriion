@@ -5,14 +5,30 @@
 
 import { useEffect, useRef } from "react";
 import rough from "roughjs";
+import { transform } from "./pathdata";
 import type { GeometrySpec, NodeStatus } from "./protocol";
 
 const VIEW = 400;
 const MARGIN = 28;
 const SPAN = VIEW - 2 * MARGIN;
+// Abstract text units → px, matched to the server renderer (4 ≈ 15px).
+const FONT_PX_PER_UNIT = 15 / 4;
 
 const sx = (x: number) => MARGIN + (x / 100) * SPAN;
 const sy = (y: number) => MARGIN + (y / 100) * SPAN;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function textEl(x: number, y: number, content: string, color: string, sizePx: number): SVGTextElement {
+  const t = document.createElementNS(SVG_NS, "text");
+  t.setAttribute("x", String(x));
+  t.setAttribute("y", String(y + sizePx / 4)); // nudge baseline so text reads centered
+  t.setAttribute("text-anchor", "middle");
+  t.setAttribute("font-size", String(sizePx));
+  t.setAttribute("font-family", "ui-sans-serif, system-ui");
+  t.setAttribute("fill", color);
+  t.textContent = content;
+  return t;
+}
 
 // Stroke comes from the spec (spoken colors land there via the classifier);
 // pruned nodes fade regardless. Focus emphasis is the card outline's job.
@@ -24,21 +40,24 @@ function drawShape(
   rc: ReturnType<typeof rough.svg>,
   spec: GeometrySpec,
   color: string,
-): SVGGElement | null {
+): SVGElement | null {
   const cx = sx(spec.x);
   const cy = sy(spec.y);
   const w = (spec.width / 100) * SPAN;
   const h = (spec.height / 100) * SPAN;
   // Deterministic seed from geometry so the wobble is stable across re-renders.
   const seed = Math.abs(Math.round((spec.x + spec.y * 7 + spec.width * 13) * 100)) % 9999;
+  // fill_style "none" wins over a fill color; otherwise honour the requested
+  // style, defaulting to the sketchy hachure look (the client's whole point).
+  const fillStyle = spec.fill_style ?? "hachure";
   const opts = {
     stroke: color,
-    strokeWidth: 2.2,
+    strokeWidth: spec.stroke_width ?? 2.2,
     roughness: 1.6,
     bowing: 1.2,
     seed,
-    fill: spec.fill ?? undefined,
-    fillStyle: "hachure" as const,
+    fill: fillStyle === "none" ? undefined : (spec.fill ?? undefined),
+    fillStyle: (fillStyle === "none" ? "solid" : fillStyle) as "hachure" | "solid",
   };
 
   switch (spec.kind) {
@@ -72,6 +91,24 @@ function drawShape(
     case "line":
     case "edge":
       return rc.line(cx - w / 2, cy, cx + w / 2, cy, opts);
+    case "polygon":
+      if (!spec.points?.length) return null;
+      return rc.polygon(
+        spec.points.map(([px, py]) => [sx(px), sy(py)]),
+        opts,
+      );
+    case "path":
+      if (!spec.d) return null;
+      // Map the 0..100 path numbers into the viewport (rough redraws point by
+      // point; an SVG transform would scale stroke + wobble). Arc radii are
+      // lengths, so their map is offset-free — no MARGIN.
+      return rc.path(
+        transform(spec.d, sx, sy, (r) => (r / 100) * SPAN),
+        opts,
+      );
+    case "text":
+      if (!spec.label) return null;
+      return textEl(cx, cy, spec.label, color, (spec.font_size ?? 4) * FONT_PX_PER_UNIT);
     default:
       return null;
   }

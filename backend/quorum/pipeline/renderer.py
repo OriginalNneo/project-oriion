@@ -17,7 +17,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from quorum.domain.geometry import GeometrySpec, ShapeKind
+from quorum.domain import pathdata
+from quorum.domain.geometry import FillStyle, GeometrySpec, ShapeKind
+
+# TEXT font_size is in abstract units; 4 ≈ 15px in the 400px viewBox (matches
+# the client). Kept as a named constant so both renderers stay in lockstep.
+_FONT_PX_PER_UNIT = 15.0 / 4.0
 
 # The SVG viewport. Abstract 0..100 geometry maps into a margin-inset box so
 # strokes near the edge aren't clipped.
@@ -62,12 +67,15 @@ def _shape_body(spec: GeometrySpec) -> str:
     cx, cy = _sx(spec.x), _sy(spec.y)
     w = spec.width / 100.0 * _SPAN
     h = spec.height / 100.0 * _SPAN
-    fill = spec.fill or "none"
     stroke = spec.stroke
-    sw = 2.4  # stroke width, px
+    sw = spec.stroke_width if spec.stroke_width is not None else 2.4  # px
+    # Server is the clean deterministic reference and can't hachure: HACHURE and
+    # SOLID both render as a flat fill; NONE forces no fill (client does the
+    # sketchy hachure look). fill_style is honoured the same way on both sides.
+    fill = "none" if spec.fill_style is FillStyle.NONE else (spec.fill or "none")
 
     common = (
-        f'fill="{fill}" stroke="{stroke}" stroke-width="{sw}" '
+        f'fill="{fill}" stroke="{stroke}" stroke-width="{_fmt(sw)}" '
         f'stroke-linecap="round" stroke-linejoin="round"'
     )
 
@@ -103,15 +111,30 @@ def _shape_body(spec: GeometrySpec) -> str:
         x1, y1 = cx + w / 2, cy
         return f'<line x1="{_fmt(x0)}" y1="{_fmt(y0)}" x2="{_fmt(x1)}" y2="{_fmt(y1)}" {common}/>'
 
+    if spec.kind is ShapeKind.POLYGON and spec.points is not None:
+        pts = " ".join(f"{_fmt(_sx(px))},{_fmt(_sy(py))}" for px, py in spec.points)
+        return f'<polygon points="{pts}" {common}/>'
+
+    if spec.kind is ShapeKind.PATH and spec.d is not None:
+        # Map the path numbers through the viewport. Arc radii are LENGTHS, not
+        # positions, so their map is offset-free (no _MARGIN) — unlike _sx/_sy.
+        d = pathdata.transform(spec.d, fx=_sx, fy=_sy, fr=lambda r: r / 100.0 * _SPAN)
+        return f'<path d="{d}" {common}/>'
+
+    if spec.kind is ShapeKind.TEXT and spec.label is not None:
+        return _label(cx, cy, spec.label, stroke, spec.font_size * _FONT_PX_PER_UNIT)
+
     # Unknown kind: render nothing rather than crash the loop.
     return f"<!-- unsupported shape: {spec.kind} -->"
 
 
-def _label(cx: float, cy: float, text: str, color: str) -> str:
+def _label(cx: float, cy: float, text: str, color: str, size: float = 16.0) -> str:
     safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Nudge baseline down ~quarter of the glyph so the text reads centered on cy.
     return (
-        f'<text x="{_fmt(cx)}" y="{_fmt(cy + 4)}" text-anchor="middle" '
-        f'font-family="ui-sans-serif, system-ui" font-size="16" fill="{color}">{safe}</text>'
+        f'<text x="{_fmt(cx)}" y="{_fmt(cy + size / 4)}" text-anchor="middle" '
+        f'font-family="ui-sans-serif, system-ui" font-size="{_fmt(size)}" '
+        f'fill="{color}">{safe}</text>'
     )
 
 
