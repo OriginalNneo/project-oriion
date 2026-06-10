@@ -1,0 +1,38 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# ---- Node / frontend ----
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ---- Quorum runtime ----
+.quorum-memory.jsonl
+*.log
+.env
+.env.*
+!.env.example
+
+# ---- Models / large artifacts ----
+models/
+*.bin
+*.pt
+*.onnx
+
+# ---- OS / editor ----
+.DS_Store
+.idea/
+.vscode/
+*.swp
