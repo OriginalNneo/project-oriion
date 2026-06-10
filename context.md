@@ -26,6 +26,12 @@ vite build); fast path p95 0.072 ms.
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Fix: StrictMode dev double-mount froze the app.** The connect effect's
+  "ran once" guard left mount #2 with a closed socket → UI rendered but dead
+  (and the mic looked broken — utterances dropped into a dead socket). Gotcha
+  for all future effects: **make them re-runnable, never guard with a ref** —
+  StrictMode runs effect → cleanup → effect in dev. Verified with a driven
+  headless Chromium (screenshot: dot green, sketch renders, console clean).
 - **Phase 1a — the Voice MVP (plan.md §1.1).** Five segments, all checks green:
   - **Voice input** — `frontend/src/speech.ts`: Web Speech API wrapper
     (continuous, interim results, auto-restart after browser silence cutoff,
