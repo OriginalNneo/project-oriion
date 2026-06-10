@@ -111,11 +111,20 @@ export class VoiceInput {
     };
 
     rec.onerror = (ev) => {
-      // "no-speech"/"aborted" are routine; permission errors are terminal.
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+      // "no-speech"/"aborted" are routine and the auto-restart absorbs them;
+      // everything else must be VISIBLE or the mic just looks dead.
+      console.debug("[voice] recognition error:", ev.error);
+      const terminal: Record<string, string> = {
+        "not-allowed": "microphone access was denied — allow it in the address bar",
+        "service-not-allowed": "speech service blocked by the browser",
+        "audio-capture": "no usable microphone was found",
+        network: "speech service unreachable (browser STT needs internet)",
+      };
+      const message = terminal[ev.error];
+      if (message) {
         this.enabled = false;
         this.opts.onState?.(false);
-        this.opts.onError?.("microphone access was denied");
+        this.opts.onError?.(message);
       }
     };
 
