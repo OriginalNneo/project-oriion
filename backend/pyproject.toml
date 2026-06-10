@@ -1,0 +1,75 @@
+[project]
+name = "quorum"
+version = "0.1.0"
+description = "Quorum — voice-driven collaborative design tool (gateway + pipeline)"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "websockets>=13",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "structlog>=24.4",
+]
+
+# Heavy ML stages live behind extras so Phase 0/CI stays lean and installable.
+# Phase 1 pulls `local`; Phase 4 may add `embeddings`; cloud paths need `groq`.
+[project.optional-dependencies]
+local = [
+    "faster-whisper>=1.0",
+    "silero-vad>=5.1",
+    "numpy>=1.26",
+]
+embeddings = [
+    "sentence-transformers>=3.0",
+]
+groq = [
+    "groq>=0.11",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "ruff>=0.7",
+    "mypy>=1.13",
+]
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quorum"]
+
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+ignore = ["B008"]  # FastAPI Depends() in defaults is idiomatic
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["faster_whisper.*", "silero_vad.*", "sentence_transformers.*", "groq.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "latency: latency benchmark tests (first-class — see RULES.md §3)",
+    "integration: end-to-end loop tests",
+]
