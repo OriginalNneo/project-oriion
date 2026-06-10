@@ -74,7 +74,19 @@ export class VoiceInput {
   }
 
   static isSupported(): boolean {
-    return recognitionCtor() !== null && window.isSecureContext;
+    return VoiceInput.unavailableReason() === null;
+  }
+
+  /** Why voice can't work in this tab, or null if it can. Shown verbatim in
+   * the UI — "unavailable" with no reason is undebuggable for the user. */
+  static unavailableReason(): string | null {
+    if (recognitionCtor() === null) {
+      return "this browser has no speech recognition — use Chrome, Edge, or Safari";
+    }
+    if (!window.isSecureContext) {
+      return `voice is blocked on insecure origins — open via localhost (or HTTPS), not ${location.host}`;
+    }
+    return null;
   }
 
   get listening(): boolean {
