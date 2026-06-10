@@ -10,11 +10,18 @@ export type ShapeKind =
   | "ellipse"
   | "line"
   | "group"
+  // IR v2 — intricacy primitives (isometric faces, wireframes, labels):
+  | "polygon"
+  | "path"
+  | "text"
   | "node"
   | "edge";
 
 export type NodeStatus = "active" | "focused" | "pruned";
 export type Role = "participant" | "display";
+
+// Mirrors rough.js fillStyle choices (domain/geometry.py FillStyle).
+export type FillStyle = "hachure" | "solid" | "none";
 
 export interface GeometrySpec {
   kind: ShapeKind;
@@ -28,6 +35,13 @@ export interface GeometrySpec {
   fill: string | null;
   // "group" scenes: positioned primitives sharing the same 0..100 box.
   parts: GeometrySpec[];
+  // --- IR v2 fields (all optional; v1 specs omit them) ---
+  name?: string | null; // addressable part name for later MODIFY targeting
+  points?: [number, number][] | null; // polygon vertices, 0..100 box
+  d?: string | null; // constrained SVG path data, 0..100 box (see pathdata.ts)
+  font_size?: number; // text glyph size in abstract units (4 ≈ 15px)
+  stroke_width?: number | null; // viewBox px; null = renderer default
+  fill_style?: FillStyle | null; // null = renderer default
 }
 
 export interface NodeView {

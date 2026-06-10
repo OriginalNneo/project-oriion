@@ -259,17 +259,13 @@ class RulesClassifier:
         return [(m.start(), m.group(1), _SHAPE_WORDS[m.group(1)]) for m in _SHAPE_RE.finditer(text)]
 
     @staticmethod
-    def _part(
-        word: str, kind: ShapeKind, x: float, y: float, w: float, h: float
-    ) -> GeometrySpec:
+    def _part(word: str, kind: ShapeKind, x: float, y: float, w: float, h: float) -> GeometrySpec:
         """One positioned primitive of a scene. 'square' keeps equal sides."""
         if word == "square":
             w = h = min(w, h)
         return GeometrySpec(kind=kind, x=x, y=y, width=w, height=h)
 
-    def _compose_scene(
-        self, text: str, mentions: list[tuple[int, str, ShapeKind]]
-    ) -> GeometrySpec:
+    def _compose_scene(self, text: str, mentions: list[tuple[int, str, ShapeKind]]) -> GeometrySpec:
         """Compose 2+ shape mentions into one GROUP scene.
 
         Rules-level spatial vocabulary only: stacked ("on top of"/"above"),
