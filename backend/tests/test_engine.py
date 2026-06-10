@@ -107,7 +107,7 @@ def test_focus_bumps_affirmation_and_marks_status() -> None:
     assert snap[a].status == NodeStatus.ACTIVE  # old focus de-emphasized
 
 
-def test_prune_removes_and_reassigns_focus() -> None:
+def test_prune_fades_node_and_reassigns_focus() -> None:
     eng = _engine()
     a = eng.apply(_create(ShapeKind.RECTANGLE)).upserted[0].id
     b = (
@@ -126,8 +126,100 @@ def test_prune_removes_and_reassigns_focus() -> None:
     # a is the focus (first node). Prune it -> focus must move to b.
     prune = DesignOp(op_type=OpType.PRUNE, target_node_id=a, speaker_id="x", utterance_id="u5")
     diff = eng.apply(prune)
-    assert a in diff.removed_ids
+    views = {v.id: v for v in diff.upserted}
+    # prune is an upsert (faded), not a removal — diffs must match snapshots
+    assert diff.removed_ids == []
+    assert views[a].status == NodeStatus.PRUNED
+    # the newly focused node's view is in the same diff (clients see the move)
+    assert views[b].status == NodeStatus.FOCUSED
     assert eng.focus_node_id == b
+    assert diff.focus_node_id == b
+
+
+def test_negative_preference_disaffirms_without_moving_focus() -> None:
+    eng = _engine()
+    a = eng.apply(_create(ShapeKind.RECTANGLE)).upserted[0].id
+    b = (
+        eng.apply(
+            DesignOp(
+                op_type=OpType.BRANCH,
+                target_node_id=a,
+                geometry=GeometrySpec(kind=ShapeKind.TRIANGLE),
+                speaker_id="bob",
+                utterance_id="u2",
+            )
+        )
+        .upserted[0]
+        .id
+    )
+    # "not the triangle" — focus must NOT move to b; b's score must drop.
+    reject = DesignOp(
+        op_type=OpType.FOCUS,
+        target_node_id=b,
+        preference_signal=-0.6,
+        speaker_id="cara",
+        utterance_id="u3",
+    )
+    diff = eng.apply(reject)
+    assert eng.focus_node_id == a
+    rejected = next(v for v in diff.upserted if v.id == b)
+    assert rejected.affirmation_score < 0
+    # a second rejection sinks it past the prune floor -> auto-pruned
+    diff2 = eng.apply(reject.model_copy(update={"utterance_id": "u4"}))
+    assert next(v for v in diff2.upserted if v.id == b).status == NodeStatus.PRUNED
+
+
+def test_replay_reproduces_live_state() -> None:
+    eng = _engine()
+    a = eng.apply(_create(ShapeKind.RECTANGLE)).upserted[0].id
+    b = (
+        eng.apply(
+            DesignOp(
+                op_type=OpType.BRANCH,
+                target_node_id=a,
+                target_shape=ShapeKind.TRIANGLE,
+                geometry=GeometrySpec(kind=ShapeKind.TRIANGLE),
+                speaker_id="bob",
+                utterance_id="u2",
+            )
+        )
+        .upserted[0]
+        .id
+    )
+    eng.apply(
+        DesignOp(
+            op_type=OpType.MODIFY,
+            target_node_id=a,
+            modifiers=["fillet", "bigger"],
+            speaker_id="alice",
+            utterance_id="u3",
+        )
+    )
+    eng.apply(
+        DesignOp(
+            op_type=OpType.FOCUS,
+            target_node_id=b,
+            preference_signal=0.9,
+            speaker_id="cara",
+            utterance_id="u4",
+        )
+    )
+    eng.apply(DesignOp(op_type=OpType.PRUNE, target_node_id=a, speaker_id="x", utterance_id="u5"))
+
+    replayed = DesignStateEngine.from_events("t", eng.events(), clock=FixedClock())
+    assert replayed.focus_node_id == eng.focus_node_id
+    assert replayed.seq == eng.seq
+    live = {n.id: n for n in eng.snapshot().nodes}
+    back = {n.id: n for n in replayed.snapshot().nodes}
+    assert live.keys() == back.keys()
+    for nid, node in live.items():
+        assert back[nid].status == node.status, nid
+        assert back[nid].geometry == node.geometry, nid
+        assert back[nid].affirmation_score == node.affirmation_score, nid
+        assert back[nid].parent_ids == node.parent_ids, nid
+    # new ids after replay never collide with replayed ones
+    new_id = replayed._ids.next()  # white-box: counter resumed past replayed ids
+    assert new_id not in live
 
 
 def test_event_log_is_append_only_and_ordered() -> None:

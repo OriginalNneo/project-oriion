@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from quorum.domain.events import DesignEvent, EventType
-from quorum.domain.geometry import GeometrySpec, ShapeKind
+from quorum.domain.geometry import GeometrySpec, ShapeKind, apply_modifiers
 from quorum.domain.messages import NodeView, StateDiff, TreeSnapshot, node_to_view
 from quorum.domain.op import ClassifierContext, DesignOp, NodeRef, OpType
 from quorum.domain.tree import IdeaNode, NodeStatus, Provenance
@@ -104,10 +104,14 @@ class DesignStateEngine:
         """Apply a DesignOp; append events; return a StateDiff. Never raises on a
         well-formed op — unknown/unsupported intents degrade to a no-op diff so a
         single weird utterance can't take the loop down (plan.md §9 fault tolerance).
+
+        Pruned nodes are *upserted* with status ``pruned`` (they fade client-side
+        and stay in the snapshot for late joiners); ``removed_ids`` is reserved
+        for hard deletes, which don't exist yet.
         """
         with stage_timer_sync("engine", utterance_id=op.utterance_id):
             upserted: list[NodeView] = []
-            removed: list[str] = []
+            focus_before = self._focus_id
 
             if op.op_type == OpType.CREATE:
                 upserted.append(self._create(op))
@@ -120,7 +124,7 @@ class DesignStateEngine:
             elif op.op_type == OpType.FOCUS:
                 upserted.extend(self._focus(op))
             elif op.op_type == OpType.PRUNE:
-                removed.extend(self._prune(op))
+                upserted.extend(self._prune(op))
             elif op.op_type == OpType.CONNECT:
                 node = self._connect(op)
                 if node:
@@ -131,13 +135,28 @@ class DesignStateEngine:
                 _log.warning("unknown_op_type", op_type=op.op_type)
 
             # Auto-prune to keep the idea cloud bounded (plan.md §4).
-            removed.extend(self._enforce_caps())
+            upserted.extend(self._enforce_caps())
+
+            # If focus moved (explicitly or via prune-reassignment), both ends of
+            # the move must reach clients, or they render a stale status.
+            if self._focus_id != focus_before:
+                touched = {v.id for v in upserted}
+                for nid in (focus_before, self._focus_id):
+                    if nid and nid not in touched and nid in self._nodes:
+                        upserted.append(node_to_view(self._nodes[nid]))
+
+            # One entry per node, reflecting post-apply state (handlers may have
+            # touched the same node more than once, e.g. prune then refocus).
+            order: dict[str, None] = {}
+            for view in upserted:
+                order.setdefault(view.id, None)
+            final_upserts = [node_to_view(self._nodes[nid]) for nid in order if nid in self._nodes]
 
             return StateDiff(
                 room=self.room,
                 seq=self._seq,
-                upserted=upserted,
-                removed_ids=removed,
+                upserted=final_upserts,
+                removed_ids=[],
                 focus_node_id=self._focus_id,
             )
 
@@ -147,12 +166,15 @@ class DesignStateEngine:
     def _create(self, op: DesignOp) -> NodeView:
         geom = self._resolve_geometry(op, parent=None)
         node = self._new_node(op, geom, parent_ids=[])
+        # First node created becomes the focus by default. Status is set before
+        # the event is recorded so the event's node snapshot is replay-accurate.
+        first = self._focus_id is None
+        if first:
+            node.status = NodeStatus.FOCUSED
         self._nodes[node.id] = node
         self._record(EventType.NODE_CREATED, op, node)
-        # First node created becomes the focus by default.
-        if self._focus_id is None:
+        if first:
             self._set_focus(node.id, op)
-            node.status = NodeStatus.FOCUSED
         return node_to_view(node)
 
     def _branch(self, op: DesignOp) -> NodeView:
@@ -181,27 +203,34 @@ class DesignStateEngine:
 
     def _focus(self, op: DesignOp) -> list[NodeView]:
         target_id = op.target_node_id or self._focus_id
-        if target_id is None or target_id not in self._nodes:
+        node = self._nodes.get(target_id) if target_id else None
+        if node is None or node.status == NodeStatus.PRUNED:
             return []
+
+        # Negative preference ("not the triangle") DISAFFIRMS the target: lower
+        # its score without moving focus. _enforce_caps prunes it if it sinks
+        # past the floor. Focusing a node someone just rejected would be wrong.
+        if op.preference_signal < 0:
+            node.affirmation_score += op.preference_signal
+            self._record(EventType.AFFIRMATION_CHANGED, op, node)
+            return [node_to_view(node)]
+
         changed: list[NodeView] = []
         previous = self._focus_id
         self._set_focus(target_id, op)
-        # De-emphasize the old focus, emphasize the new one, bump affirmation.
-        touched = [target_id] + ([previous] if previous and previous != target_id else [])
-        for nid in touched:
-            node = self._nodes.get(nid)
-            if node is None:
-                continue
-            if node.id == target_id:
-                node.status = NodeStatus.FOCUSED
-                node.affirmation_score += _FOCUS_BUMP + max(0.0, op.preference_signal)
-                self._record(EventType.AFFIRMATION_CHANGED, op, node)
-            elif node.status == NodeStatus.FOCUSED:
-                node.status = NodeStatus.ACTIVE
-            changed.append(node_to_view(node))
+        node.status = NodeStatus.FOCUSED
+        node.affirmation_score += _FOCUS_BUMP + op.preference_signal
+        self._record(EventType.AFFIRMATION_CHANGED, op, node)
+        changed.append(node_to_view(node))
+        # De-emphasize the old focus.
+        if previous and previous != target_id:
+            prev = self._nodes.get(previous)
+            if prev is not None and prev.status == NodeStatus.FOCUSED:
+                prev.status = NodeStatus.ACTIVE
+                changed.append(node_to_view(prev))
         return changed
 
-    def _prune(self, op: DesignOp) -> list[str]:
+    def _prune(self, op: DesignOp) -> list[NodeView]:
         target_id = op.target_node_id
         if target_id is None or target_id not in self._nodes:
             return []
@@ -209,7 +238,7 @@ class DesignStateEngine:
 
     def _connect(self, op: DesignOp) -> NodeView | None:
         a, b = op.target_node_id, op.relation_to_node
-        if not a or not b or a not in self._nodes or b not in self._nodes:
+        if not a or not b or a == b or a not in self._nodes or b not in self._nodes:
             return None
         na, nb = self._nodes[a], self._nodes[b]
         geom = GeometrySpec(
@@ -222,6 +251,10 @@ class DesignStateEngine:
         edge = self._new_node(op, geom, parent_ids=[a, b])
         edge.label = op.modifiers[0] if op.modifiers else None
         self._nodes[edge.id] = edge
+        # Keep children_ids the exact inverse of parent_ids — replay re-derives
+        # it from parent_ids, so the live fold must match.
+        for endpoint in (na, nb):
+            endpoint.children_ids = [*endpoint.children_ids, edge.id]
         self._record(EventType.NODES_CONNECTED, op, edge)
         return node_to_view(edge)
 
@@ -270,26 +303,10 @@ class DesignStateEngine:
 
     @staticmethod
     def _apply_modifiers(geom: GeometrySpec, op: DesignOp) -> GeometrySpec:
-        """Fold textual modifiers into the geometry (e.g. 'fillet', 'radius:8')."""
-        updates: dict[str, float] = {}
-        for mod in op.modifiers:
-            m = mod.strip().lower()
-            if m == "fillet" or m == "rounded":
-                updates["corner_radius"] = max(geom.corner_radius, 12.0)
-            elif m.startswith("radius:"):
-                try:
-                    updates["corner_radius"] = float(m.split(":", 1)[1])
-                except ValueError:
-                    pass
-            elif m == "bigger":
-                updates["width"] = min(100.0, geom.width * 1.3)
-                updates["height"] = min(100.0, geom.height * 1.3)
-            elif m == "smaller":
-                updates["width"] = max(4.0, geom.width * 0.7)
-                updates["height"] = max(4.0, geom.height * 0.7)
-        return geom.model_copy(update=updates) if updates else geom
+        """Fold textual modifiers into the geometry (shared domain vocabulary)."""
+        return apply_modifiers(geom, op.modifiers)
 
-    def _set_focus(self, node_id: str, op: DesignOp) -> None:
+    def _set_focus(self, node_id: str | None, op: DesignOp | None) -> None:
         previous = self._focus_id
         self._focus_id = node_id
         self._record(
@@ -299,15 +316,21 @@ class DesignStateEngine:
             payload={"focus_node_id": node_id, "previous": previous},
         )
 
-    def _prune_node(self, node_id: str, op: DesignOp | None) -> list[str]:
+    def _prune_node(self, node_id: str, op: DesignOp | None) -> list[NodeView]:
         node = self._nodes.get(node_id)
         if node is None or node.status == NodeStatus.PRUNED:
             return []
         node.status = NodeStatus.PRUNED
         self._record(EventType.NODE_PRUNED, op, node)
+        views = [node_to_view(node)]
         if self._focus_id == node_id:
-            self._focus_id = self._pick_new_focus()
-        return [node_id]
+            # Reassign focus through _set_focus so the move is in the event log —
+            # replay must land on the same focus the live session had.
+            new_focus = self._pick_new_focus()
+            self._set_focus(new_focus, None)
+            if new_focus is not None:
+                views.append(node_to_view(self._nodes[new_focus]))
+        return views
 
     def _pick_new_focus(self) -> str | None:
         candidates = [n for n in self._nodes.values() if n.status != NodeStatus.PRUNED]
@@ -317,14 +340,14 @@ class DesignStateEngine:
         best.status = NodeStatus.FOCUSED
         return best.id
 
-    def _enforce_caps(self) -> list[str]:
+    def _enforce_caps(self) -> list[NodeView]:
         """Auto-prune to keep the idea cloud bounded (plan.md §4)."""
         active = [n for n in self._nodes.values() if n.status != NodeStatus.PRUNED]
-        removed: list[str] = []
+        pruned: list[NodeView] = []
         # 1) prune anything below the negative-affirmation floor
         for n in active:
             if n.affirmation_score <= _PRUNE_THRESHOLD and n.id != self._focus_id:
-                removed.extend(self._prune_node(n.id, None))
+                pruned.extend(self._prune_node(n.id, None))
         # 2) enforce the max-active cap, pruning weakest (never the focus)
         active = [n for n in self._nodes.values() if n.status != NodeStatus.PRUNED]
         if len(active) > _MAX_ACTIVE_BRANCHES:
@@ -334,8 +357,64 @@ class DesignStateEngine:
             )
             overflow = len(active) - _MAX_ACTIVE_BRANCHES
             for n in weakest[:overflow]:
-                removed.extend(self._prune_node(n.id, None))
-        return removed
+                pruned.extend(self._prune_node(n.id, None))
+        return pruned
+
+    # ------------------------------------------------------------------ #
+    # Replay — state is a fold over the event log                        #
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def from_events(
+        cls,
+        room: str,
+        events: list[DesignEvent],
+        *,
+        renderer: Renderer | None = None,
+        clock: Clock | None = None,
+    ) -> DesignStateEngine:
+        """Rebuild an engine by folding an append-only event log.
+
+        This is the event-sourcing guarantee made executable: a live session and
+        its replay must agree on nodes, focus, and seq (tested). Node snapshots
+        carry per-node state; FOCUS_CHANGED carries the focus; children_ids and
+        active/focused statuses are derived, so they're re-derived here.
+        """
+        eng = cls(
+            room=room,
+            renderer=renderer or get_renderer(),
+            clock=clock or SystemClock(),
+        )
+        for ev in events:
+            if ev.node is not None:
+                eng._nodes[ev.node.id] = ev.node.model_copy(deep=True)
+            if ev.type is EventType.FOCUS_CHANGED:
+                focus = ev.payload.get("focus_node_id")
+                eng._focus_id = focus if isinstance(focus, str) else None
+            eng._seq = max(eng._seq, ev.seq)
+            eng._events.append(ev)
+
+        # children_ids is the inverse of parent_ids — re-derive it.
+        for node in eng._nodes.values():
+            node.children_ids = []
+        for node in eng._nodes.values():
+            for pid in node.parent_ids:
+                parent = eng._nodes.get(pid)
+                if parent is not None and node.id not in parent.children_ids:
+                    parent.children_ids = [*parent.children_ids, node.id]
+
+        # Statuses other than PRUNED follow the focus, which may have moved
+        # after a node's last snapshot was recorded.
+        for node in eng._nodes.values():
+            if node.status != NodeStatus.PRUNED:
+                node.status = NodeStatus.FOCUSED if node.id == eng._focus_id else NodeStatus.ACTIVE
+
+        # Resume the id counter past every replayed id so new ids never collide.
+        max_i = 0
+        for nid in eng._nodes:
+            if nid.startswith("n") and nid[1:].isdigit():
+                max_i = max(max_i, int(nid[1:]))
+        eng._ids = MonotonicCounter(start=max_i)
+        return eng
 
     def _record(
         self,

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from quorum.engine import DesignStateEngine
 from quorum.engine.clock import SystemClock
 from quorum.observability.latency import LatencyLedger, get_ledger, stage_timer
-from quorum.pipeline.classify import MockClassifier
+from quorum.pipeline.classify import RulesClassifier
 
 # Fixed sample utterances — the repeatable corpus. Mix of create/branch/modify/
 # preference so the cascade fast path is exercised the way a real session would.
@@ -28,10 +28,12 @@ SAMPLE_UTTERANCES: list[str] = [
     "a rectangle with a fillet",
     "how about a triangle instead",
     "make it bigger",
-    "a circle",
+    "a red circle",
     "let's go with the triangle",
+    "make the circle smaller",
     "an ellipse",
     "add a fillet",
+    "not the ellipse",
 ]
 
 
@@ -53,7 +55,7 @@ async def run_loop_benchmark(
     """
     ledger = ledger or get_ledger()
     ledger.reset()
-    classifier = MockClassifier()
+    classifier = RulesClassifier()
     engine = DesignStateEngine(room="bench", clock=SystemClock())
 
     e2e: list[float] = []

@@ -21,7 +21,7 @@ from quorum.domain.messages import (
     SnapshotMessage,
     StateDiff,
 )
-from quorum.domain.op import DesignOp
+from quorum.domain.op import DesignOp, OpType
 from quorum.engine import DesignStateEngine
 from quorum.engine.clock import Clock, SystemClock
 from quorum.gateway.connection import Connection
@@ -70,7 +70,7 @@ class Room:
         async with self._lock:
             diff = self.engine.apply(op)
         # Broadcast outside the lock: fan-out I/O shouldn't hold up the next op.
-        if diff.upserted or diff.removed_ids or op.op_type.value == "focus":
+        if diff.upserted or diff.removed_ids or op.op_type is OpType.FOCUS:
             await self.broadcast(DiffMessage(diff=diff))
         return diff
 
