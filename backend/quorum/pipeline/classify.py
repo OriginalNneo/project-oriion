@@ -233,7 +233,7 @@ class RulesClassifier:
                     op_type=OpType.MODIFY,
                     target_node_id=target,
                     modifiers=modifiers,
-                    confidence=0.75,
+                    confidence=_HAZY_CONFIDENCE if hazy else 0.75,
                 )
 
         # 5) two or more shapes -> compose ONE scene node (group geometry).
@@ -266,13 +266,15 @@ class RulesClassifier:
                 confidence=_HAZY_CONFIDENCE if hazy else 0.85,
             )
 
-        # 7) bare modifier ("make it bigger") -> MODIFY the focus
+        # 7) bare modifier ("make it bigger") -> MODIFY the focus. A color word
+        # inside a rich utterance ("a snowman with a red scarf") is NOT a bare
+        # modifier — the hazy cap sends those to the LLM stage.
         if modifiers and focus_node_id is not None:
             return op(
                 op_type=OpType.MODIFY,
                 target_node_id=focus_node_id,
                 modifiers=modifiers,
-                confidence=0.7,
+                confidence=_HAZY_CONFIDENCE if hazy else 0.7,
             )
 
         # 8) nothing matched — low-confidence NOOP. The cascade escalates this

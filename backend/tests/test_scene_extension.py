@@ -17,12 +17,14 @@ Two gaps closed here, found at the "draw more complicated things" review:
 
 from __future__ import annotations
 
+import httpx
+
 from quorum.domain.geometry import GeometrySpec, ShapeKind
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
 from quorum.engine import DesignStateEngine
 from quorum.engine.clock import FixedClock
 from quorum.pipeline.classify import CascadeClassifier, RulesClassifier
-from quorum.pipeline.llm import _LLMPayload, payload_to_op
+from quorum.pipeline.llm import LLMClassifier, _LLMPayload, payload_to_op
 from quorum.pipeline.renderer import SvgRenderer
 
 from .test_cascade import FakeLLM
@@ -189,6 +191,58 @@ _EXTEND = """
    {"kind":"rectangle","name":"thruster-4","x":7,"y":59,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c"},
    {"kind":"rectangle","name":"thruster-5","x":7,"y":68,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c"}]}}
 """
+
+
+async def test_color_words_in_rich_utterance_escalate_not_modify_focus() -> None:
+    # "red"/"blue" used to match the color table and MODIFY the focus at 0.7,
+    # so the snowman never reached the LLM. Hazy cap now applies to that path.
+    ctx = ClassifierContext(focus_node_id="n1")
+    op = await RulesClassifier().classify(
+        "a snowman with a red scarf and a blue hat, colored in",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    assert op.confidence < 0.55  # escalates; rules MODIFY stays as fallback
+
+
+async def test_rate_limited_post_retries_once_then_succeeds() -> None:
+    # Groq 429s back-to-back utterances; one short retry must rescue the call.
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, headers={"retry-after": "0"})
+        return httpx.Response(200, json={"ok": True})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        resp = await LLMClassifier._post_with_retry(client, "https://x/y", json={})
+    assert calls == 2
+    assert resp.status_code == 200
+
+
+_CUBE = """
+{"op_type":"create","target_shape":"group","confidence":0.9,
+ "geometry":{"kind":"group","x":50,"y":50,"width":60,"height":60,"stroke":"#1f2937","parts":[
+   {"kind":"polygon","name":"face-front","x":50,"y":60,"width":36,"height":36,"stroke":"#1f2937",
+    "fill":"#9ca3af","fill_style":"solid","points":[[32,42],[68,42],[68,78],[32,78]]},
+   {"kind":"polygon","name":"face-top","x":57,"y":35,"width":50,"height":14,"stroke":"#1f2937",
+    "fill":"#e5e7eb","fill_style":"solid","points":[[32,42],[46,28],[82,28],[68,42]]},
+   {"kind":"polygon","name":"face-right","x":75,"y":53,"width":14,"height":50,"stroke":"#1f2937",
+    "fill":"#6b7280","fill_style":"solid","points":[[68,42],[82,28],[82,64],[68,78]]}]}}
+"""
+
+
+def test_prompt_example_e_isometric_cube_parses_renders_with_fills() -> None:
+    payload = _LLMPayload.model_validate_json(_CUBE)
+    op = payload_to_op(payload, speaker_id="a", utterance_id="u1", raw_text="a 3D cube")
+    assert op.op_type == OpType.CREATE  # new idea, not a modify of the focus
+    assert op.geometry is not None and len(op.geometry.parts) == 3
+    assert all(p.fill is not None and p.fill_style is not None for p in op.geometry.parts)
+    svg = SvgRenderer().render(op.geometry)
+    assert svg.startswith("<svg") and "#9ca3af" in svg  # fill colors reach the SVG
 
 
 def test_prompt_example_d_extend_scene_parses_and_renders() -> None:

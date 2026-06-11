@@ -32,6 +32,37 @@ fast path p95 0.111 ms, LLM classify ~1.0/1.8 s (§7).
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Live retest segment: 3D shapes, device sketches, color fills — verified
+  against real Groq** (user reported "still can't do it"; agent now retests
+  live itself via `backend/scripts/probe_llm.py`, which drives utterances
+  sequentially through the cascade + one engine so focus/extend paths are real,
+  and writes each node's SVG to /tmp). Found & fixed four live bugs:
+  - **"a 3D cube"/"a simple smartphone" came back as MODIFY** and *replaced*
+    the focused funnel scene. Prompt now has an explicit create-vs-modify rule
+    (new standalone object = create even when a focus exists; modify only for
+    "add…/give it…/make it…/put X on it") + worked Example E. Verified live:
+    cube → CREATE n2, funnel untouched.
+  - **3D looked like a flattened net** (6 axis-aligned faces). Prompt teaches
+    isometric = 2-3 visible faces as polygons + Example E (front square, top &
+    side parallelograms, fill-shaded). Verified live: proper isometric cube.
+  - **Color words ("red scarf… blue hat") hijacked the rules path** — branch 7
+    (bare-modifier MODIFY on focus, 0.7) matched, so the snowman never reached
+    the LLM. The hazy cap now applies to branches 4 & 7 too. Also the prompt
+    never taught `fill` (IR + both renderers already supported it!): now stroke
+    vs fill + fill_style semantics are explicit. Verified live: snowman with
+    white-filled body, solid red scarf, solid blue hat.
+  - **Groq 429 rate-limit on back-to-back utterances** silently dropped stage-C
+    results (graceful fallback worked, drawing lost). `LLMClassifier` now
+    retries ONCE on 429/5xx after min(Retry-After, 2 s). Mocked-transport test.
+  - Also: "simple/basic X" was drawn as one lone rectangle — prompt now demands
+    the 2-4 signature parts (phone = body+screen+camera; car = body+cabin+
+    wheels). Verified live on both.
+  - Checks: ruff, mypy strict, **101 backend tests**, latency e2e p95 0.085 ms.
+    Live stage-C latencies this session: 0.7–1.6 s per intricate utterance.
+  - ⚠️ The full-suite pytest hang at `test_op_from_participant_reaches_display`
+    is **intermittent** (TestClient double-websocket deadlock?), not only the
+    zombie-process pileup: it recurred once on a clean run and passed on retry.
+    If it bites again, investigate properly (anyio portal?) instead of retrying.
 - **Scene extension + smarter escalation — DONE.** Review ask: "a funnel on its
   side, then we add 5 thrusters" must work, and rich utterances must not be
   flattened by a lucky rules match. All checks green: ruff, mypy strict, **98
