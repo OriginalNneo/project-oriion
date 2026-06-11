@@ -82,3 +82,7 @@ class ClassifierContext(BaseModel):
 
     focus_node_id: str | None = None
     candidates: list[NodeRef] = Field(default_factory=list)
+    # The focused node's current geometry, so the LLM stage can EXTEND a scene
+    # ("add five thrusters") by re-emitting the full group with new parts. Read
+    # only — the engine remains the sole state writer.
+    focus_geometry: GeometrySpec | None = None
