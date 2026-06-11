@@ -25,6 +25,7 @@ import os
 import sys
 from typing import Any
 
+import httpx
 import websockets
 
 _PORT = 8123
@@ -73,8 +74,11 @@ async def _drive() -> int:
         check({"face-top", "face-front", "face-right"} <= names,
               "isometric: 'a 3D cube' -> three shaded faces")
 
-        # 4) live LLM scene (tolerate mock/offline backends)
-        llm_live = os.environ.get("QUORUM_LLM_BACKEND", "mock") != "mock"
+        # 4) live LLM scene (tolerate mock/offline backends). Ask the SERVER
+        # which backend it runs — it loads .env itself; our shell env may lie.
+        async with httpx.AsyncClient() as http:
+            health = (await http.get(f"http://127.0.0.1:{_PORT}/healthz")).json()
+        llm_live = health["backends"]["llm"] != "mock"
         diff = await utter("a rocket with two fins and a round window")
         rocket = diff["diff"]["upserted"][0] if diff["diff"]["upserted"] else None
         if llm_live:
@@ -83,11 +87,19 @@ async def _drive() -> int:
         else:
             print("SKIP LLM scene (backend=mock)")
 
-        # 5) rules modify on focus
+        # 5) rules modify on focus. A group's own width stays put while its
+        # parts scale around the center, so compare the parts' footprint.
+        def footprint(geom: dict[str, Any]) -> float:
+            parts = geom.get("parts") or [geom]
+            left = min(float(p["x"]) - float(p["width"]) / 2 for p in parts)
+            right = max(float(p["x"]) + float(p["width"]) / 2 for p in parts)
+            return right - left
+
         before = (rocket or cube)["geometry"]
         diff = await utter("make it bigger")
         bigger = diff["diff"]["upserted"][0]["geometry"]
-        check(bigger["width"] >= before["width"], "rules: 'make it bigger' grows focus")
+        check(footprint(bigger) > footprint(before),
+              "rules: 'make it bigger' grows the focused sketch")
 
         # 6) late joiner sees state
         async with websockets.connect(_URI) as ws2:

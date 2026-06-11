@@ -5,7 +5,7 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-11  ·  **Current phase:** Phase 1a — Voice MVP ✅, richer geometry ON (Groq, IR v2), and now **scene extension + smarter escalation**: "a funnel on its side… add 5 thrusters" reaches the LLM (coverage heuristic) and MODIFY can extend the focused scene (LLM sees `focus_geometry`, engine accepts replacement geometry). **Pending:** human browser live-confirm of intricate scenes + extension; QuickDraw template library queued (§4).
+> **Last updated:** 2026-06-11  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches). **Whole program verified end to end** (real uvicorn + websocket: ALL PASS; frontend builds; 110 tests; fast path p95 0.081 ms). **Pending:** human browser live-confirm; Phase 1b server STT next (§4).
 
 ---
 
@@ -35,13 +35,27 @@ fast path p95 0.111 ms, LLM classify ~1.0/1.8 s (§7).
    rendered thumbnails (cone needed an arc sweep-flag fix — right-to-left
    arcs invert the bulge). "3D cube"/"ball"/"cog" synonyms; "3d"/"isometric"
    count as filler so "an isometric cube" is a 0 ms direct hit.
-3. [ ] **Whole-program verification:** backend checks + REAL `uvicorn` boot +
-   scripted WS client driving join→template→isometric→LLM-scene→extension;
-   frontend tsc + build.
-4. [ ] **Model improvement (measured):** `scripts/eval_llm.py` benchmarks
-   candidate Groq models (validity %, geometry richness, latency) on a fixed
-   utterance set; keep/switch on evidence. Fine-tuning stays REJECTED
-   (decisions log: blows the 1–2 s budget); retrieval + prompt is our lever.
+3. [x] **Whole-program verification — ALL PASS.** Real `uvicorn` + real
+   websocket (`scripts/e2e_check.py`): join/welcome, "a snowman" template
+   diff, "a 3D cube" isometric (3 shaded faces), live-LLM rocket scene (≥3
+   parts), "make it bigger" grows the focused sketch (parts footprint — a
+   group's own width stays fixed while parts scale), late joiner gets the
+   snapshot. Frontend tsc + vite build green. 110 backend tests, fast path
+   p95 0.081 ms.
+4. [x] **Model benchmark — measured (with caveats).** `scripts/eval_llm.py`,
+   6 utterances/model, strict-validation+render gate:
+   | model | valid | parts | p50 / p95 |
+   |---|---|---|---|
+   | llama-3.3-70b-versatile | 0/6* | — | — (*quota-corrupted: uniform 429s
+   after a day of live use — NOT a quality signal; re-run on a fresh window) |
+   | llama-4-scout-17b-16e | **4/6** | 3.5 | **1.8 / 2.1 s** |
+   | llama-3.1-8b-instant | 3/6 | 3.3 | 1.9 / 2.0 s |
+   | openai/gpt-oss-20b | 2/6 | 5 | 3.8 / 4.6 s |
+   **Decision: keep 70b default** (proven live all session); scout-17b is the
+   benchmarked fallback (`QUORUM_GROQ_MODEL`), and the e2e ALL-PASS above ran
+   on scout-17b — so the fallback is verified too. Hard case for every model:
+   adapting injected path references ("snowman wearing a top hat") — watch it
+   when re-benchmarking. Fine-tuning stays REJECTED (latency budget).
 
 - [x] Phase 0: prove the loop — participant client → WS → Design State Engine →
       SVG render → diff broadcast → both Participant and Display views update.
@@ -66,10 +80,10 @@ _(append-only-ish; newest at top)_
     faces (light top / mid front / dark side), all 8 visually verified via
     PNG thumbnails (`qlmanage`). Gotcha: SVG arc sweep flags invert when the
     path runs right-to-left — the cone's base bulged inward until flipped.
-  - `_library()` merges every `templates/*.json` bank; isometric names win
-    duplicates (sorted file order: isometric.json < quickdraw.json — wait,
-    alphabetical puts isometric first then quickdraw OVERWRITES dupes; no
-    name collisions exist today, guard if adding overlapping banks).
+  - `_library()` merges every `templates/*.json` bank in sorted filename
+    order, later files overwriting duplicate names (quickdraw.json >
+    isometric.json alphabetically). No name collisions exist today — check
+    before adding a bank with overlapping names.
   - New scripts: `make_isometric.py`, `e2e_check.py` (real uvicorn + real
     websocket whole-loop check), `eval_llm.py` (model benchmark; Groq
     free-tier TPM is per-model and our prompt is ~3.5k tokens → pace 12 s,
@@ -376,6 +390,9 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-11 | Coverage heuristic: ≥2 content words outside the rules vocabulary cap a matched op at 0.5 (below the 0.55 cascade threshold) | "a rocket with a box body and 5 thrusters" matched "box" at 0.85 and the LLM never saw the rich intent. Capping (not NOOPing) keeps the basic shape as the dead-LLM fallback; 1 unknown word stays fast so common utterances don't pay the ~1 s LLM tax |
 | 2026-06-11 | Scene extension = LLM re-emits the COMPLETE group on MODIFY; engine honours `op.geometry` as replacement; `ClassifierContext.focus_geometry` shows the LLM the current scene | "add five thrusters" needs the model to see what exists. Full-replacement beats a part-patch protocol: no new op semantics, replay/event-sourcing untouched, and validation stays one GeometrySpec. Engine remains sole writer |
 | 2026-06-11 | Template library source = Google QuickDraw (CC-BY-4.0), retrieval-augmented few-shot at runtime; FIGR-8/MMSVG only as private references (NC/murky licenses) | Only QuickDraw is license-clean for anything we ship; few-shot injection adds ~0 latency vs fine-tuning/diffusion approaches (Chat2SVG stages 2-3, StarVector, IconShop) that blow the 1-2 s budget |
+| 2026-06-11 | QuickDraw template selection = modal stroke count, then nearest 1.2x median points within the modal group, pts/stroke ≤ 32 | Max-points mines scribbles; pure median mines sloppy-typicals; modal structure is the crowd's canonical decomposition (snowman = 3 strokes). Verified by eyeballing rendered thumbnails |
+| 2026-06-11 | Isometric/3D primitives are COMPUTED templates (scripts/make_isometric.py), not LLM-drawn | A projection is math, not taste: exact 30° isometric + shaded faces beats asking a 1-2 s LLM to improvise one every time; "a 3D cube" is now a 0 ms direct hit. LLM still composes them into scenes via reference_sketches |
+| 2026-06-11 | Keep Groq `llama-3.3-70b-versatile` default; `llama-4-scout-17b-16e-instruct` is the benchmarked fallback | Benchmark's 70b row was quota-corrupted (uniform 429s) — switching on corrupted evidence would be superstition. Scout measured 4/6 valid @ p50 1.8 s AND passed the full e2e as the live stage C; kimi-k2 is gone from Groq (404) |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
