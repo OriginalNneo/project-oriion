@@ -30,6 +30,7 @@ from quorum.pipeline.llm import (
     _parse_and_repair,
     _repair_geometry_dict,
     _salvage_group_parts,
+    _split_concatenated_pair,
 )
 
 _CTX = ClassifierContext()
@@ -139,6 +140,35 @@ def test_repair_geometry_dict_clamps_polygon_points() -> None:
     for pt in raw["points"]:
         assert 0.0 <= pt[0] <= 100.0
         assert 0.0 <= pt[1] <= 100.0
+
+
+def test_split_concatenated_pair() -> None:
+    """Live llama-4-scout malformation: '[[30,40]]' emitted as '[[3040]]' —
+    the comma drops and the pair fuses. Split only when unambiguous."""
+    assert _split_concatenated_pair(3040) == [30.0, 40.0]
+    assert _split_concatenated_pair(7040) == [70.0, 40.0]
+    assert _split_concatenated_pair(1000) == [100.0, 0.0]
+    assert _split_concatenated_pair(10040) == [100.0, 40.0]
+    assert _split_concatenated_pair(305) == [30.0, 5.0]  # 3|05 has a leading zero
+    # ambiguous or impossible — refuse to guess
+    assert _split_concatenated_pair(150) is None  # 1|50 or 15|0
+    assert _split_concatenated_pair(50) is None  # a legal lone coordinate
+    assert _split_concatenated_pair(30.5) is None  # not an integer fuse
+    assert _split_concatenated_pair("3040") is None  # not a number
+    assert _split_concatenated_pair(True) is None
+
+
+def test_repair_geometry_dict_splits_fused_points() -> None:
+    raw: dict[str, Any] = {
+        "kind": "polygon",
+        "x": 50.0,
+        "y": 50.0,
+        "width": 40.0,
+        "height": 30.0,
+        "points": [[3040], [7040], [7060], [3060]],
+    }
+    _repair_geometry_dict(raw)
+    assert raw["points"] == [[30.0, 40.0], [70.0, 40.0], [70.0, 60.0], [30.0, 60.0]]
 
 
 def test_repair_geometry_dict_recurses_into_parts() -> None:

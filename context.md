@@ -5,7 +5,7 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches, exact-relation snapping, **clamp/salvage/retry output repair**). Checks green: ruff, mypy, **148 tests**. **Active program:** Drawing Quality D1–D5 (plan.md §11) — **D1 done (live-verified), D2 next**.
+> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches, exact-relation snapping, **clamp/salvage/retry output repair**). Checks green: ruff, mypy, **154 tests**. **Active program:** Drawing Quality D1–D5 (plan.md §11) — **D1 done, D2 done, D3 next**.
 
 ---
 
@@ -30,13 +30,7 @@ plan.md §11; diagnosis details in §3 below.**
    2026-06-12; needed one fix first — see §3 entry).
 2. [x] **D1 — routing + validation repair — DONE & COMMITTED** (2026-06-12,
    built by two parallel Sonnet subagents; live-verified — see §3 top entry).
-3. **D2 — prompt overhaul**: teach painter's-algorithm z-order (renderer.py:65
-   paints parts in list order — the model is never told); fills ON for 3D;
-   replace/augment Example D with an example whose parts **overlap and
-   occlude**; reword the llm.py:69 decomposition recipe ("parts attach and
-   overlap — never lay components out side-by-side"); suppress flat QuickDraw
-   `reference_sketches` when the utterance says 3D/isometric. Fixed 10-prompt
-   before/after set.
+3. [x] **D2 — prompt overhaul — DONE (2026-06-12).** See §3 for details.
 4. **D3 — deterministic isometric projection** (highest leverage): IR gains
    `box`/`cylinder`/`wedge` (x,y,z,w,d,h); the pure renderer does the 30°
    projection + shading + z-sort (generalize `make_isometric.py::_project`).
@@ -99,6 +93,42 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **D2 — prompt overhaul — DONE, eyeball-verified before/after (2026-06-12).**
+  154 tests (was 148), ruff+mypy clean, fast path p95 0.084 ms (unchanged).
+  **The subagent's first prompt rewrite FAILED the eyeball gate** — lesson
+  pinned in the decisions log. What shipped after main-thread repair:
+  - **Painter's z-order** rule block (parts render in list order, build
+    back-to-front) + **decompose recipe** now demands ATTACH-and-OVERLAP
+    (boxes share area or an edge; never disjoint side-by-side) while KEEPING
+    the proven signature-parts examples (phone = body+screen+camera) and the
+    orientation guidance — the v1 rewrite dropped those and regressed.
+  - **3D rule**: the proven Example-E recipe (front face + top/side
+    parallelograms, never hidden faces) + fills ON with three shades (light
+    top #e5e7eb / mid front #9ca3af / dark side #6b7280). The v1 rewrite's
+    "back face first" contradiction is gone.
+  - **Example G = coffee mug with steam** (body, coffee surface occluding the
+    rim, handle overlapping the right edge, steam into the coffee) — teaches
+    attach/overlap/z-order WITHOUT mis-teaching isometric (v1's "isometric
+    house" example was literally a flat front view; the model copied it).
+    Pairwise-overlap pinned in tests (computed, not eyeballed).
+  - **create-vs-modify + copy-verbatim** strengthened (the two live slips).
+  - **Flat QuickDraw ref suppression** on 3D utterances via new shared
+    `quorum/pipeline/intent.py::has_3d_intent` (classify.py imports llm.py,
+    so the regex lives in a third module — no circular import).
+  - **Fused-points repair** (`_split_concatenated_pair`): live scout-17b
+    emits `[[3040]]` for `[[30,40]]` (comma dropped) — the engine's BLOCK was
+    emitted every time and silently salvage-dropped. Split only when the
+    digits parse uniquely into two 0..100 coords (no leading zeros).
+  - **eval_d2.py**: fixed 10-prompt set, before/after run live on
+    **scout-17b** (70b daily quota was exhausted — model held constant, fair
+    prompt comparison). Eyeball verdicts: isometric house ✓ much better
+    (true 3-face shaded cube + chimney), rocket ✓ (overlapping fins back),
+    mug ✓, castle/snowman healthy; sailboat mixed; **3D engine still fails**
+    (pistons w/o block; second probe emitted `kind:"cylinder"` — invalid).
+    The model keeps reaching for volumetric primitives — direct evidence for
+    D3's box/cylinder/wedge IR. Engine/desk-lamp stay open for D3/D4.
+  - Net prompt: ~1,4xx tokens vs ~1,225 before (~+15%); LLM latency p50/p95
+    on the 10-set: 1.8 / 5.3 s (scout) — no regression vs before (2.2/6.3).
 - **D1 — routing + validation repair — DONE, live-verified (2026-06-12).**
   Built by two parallel Sonnet subagents (disjoint files), merged + verified
   on the main thread. 148 tests (was 115), ruff+mypy clean, fast path p95
@@ -516,6 +546,8 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-12 | Tangency snap **shortens** the line to the box chord around the touch point when sliding can't fit it (`_shorten_into_box`, min 5 units) | Live failure: LLM emitted a box-filling circle; no 45° tangent of the emitted length fits 0..100, so the old pass-through shipped a center chord. Tangency is the meaning; length is incidental |
 | 2026-06-12 | LLM output is **repaired, not rejected**: clamp coords pre-validation, salvage groups minus rotten parts, ONE corrective retry with the pydantic error — but domain validators stay strict | All-or-nothing validation selected for timid flat drawings (diagnosis root cause 6). Repair lives in the LLM stage (model proposes, code disposes); the domain contract is unchanged for every other caller |
 | 2026-06-12 | 3D escalation = explicit `_3D_INTENT_RE` in the hazy clause, not relaxing the `len(t) > 2` token filter | A targeted regex catches "3-d"/"three dimensional" variants the length filter never could, and doesn't risk flooding the coverage heuristic with short stopword-ish tokens |
+| 2026-06-12 | Prompt changes must pass the **eyeball gate**, and edits to a proven prompt are **additive/surgical, never rewrite-and-trim** | D2's first rewrite improved every scalar metric (parts/fills/overlap) while visibly regressing 3 of 10 renders — the metrics hid it. It had dropped proven content (signature-parts examples, orientation rule) and added a self-contradicting 3D rule + a flat "isometric" example. Numbers gate, eyes decide |
+| 2026-06-12 | Fused-points repair: split `[[3040]]` → `[[30,40]]` only when the digit split is UNIQUE (both halves 0..100, no leading zeros); otherwise leave for the validator | Live scout-17b drops the comma in coordinate pairs — the engine block was emitted every probe and silently dropped. Guessing ambiguous splits (150 → 1\|50 or 15\|0?) would corrupt geometry; refusing keeps repair trustworthy |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
