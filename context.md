@@ -5,7 +5,7 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches, **exact-relation snapping — live-verified + committed**). Checks green: ruff, mypy, **115 tests**. **Active program:** Drawing Quality D1–D5 (plan.md §11) — diagnosis done, **D1 next**.
+> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches, exact-relation snapping, **clamp/salvage/retry output repair**). Checks green: ruff, mypy, **148 tests**. **Active program:** Drawing Quality D1–D5 (plan.md §11) — **D1 done (live-verified), D2 next**.
 
 ---
 
@@ -27,14 +27,9 @@ plan.md §11; diagnosis details in §3 below.**
 
 **Resume steps (do these in order next session):**
 1. [x] **Exact-relations segment — DONE & COMMITTED** (live re-probe passed
-   2026-06-12; needed one fix first — see §3 top entry).
-2. **D1 — routing + validation repair** (small, no model change): make
-   "3d/isometric" escalate past rules (the `len(t) > 2` filter in
-   `classify.py:383` makes "3d" invisible — "a 3D box" ships a flat rect at
-   conf 0.85); clamp out-of-range coords instead of rejecting; salvage valid
-   parts instead of all-or-nothing NOOP; one retry feeding the pydantic error
-   back; set explicit `max_tokens` (llm.py:243-248 sets none — truncation =
-   silent drop).
+   2026-06-12; needed one fix first — see §3 entry).
+2. [x] **D1 — routing + validation repair — DONE & COMMITTED** (2026-06-12,
+   built by two parallel Sonnet subagents; live-verified — see §3 top entry).
 3. **D2 — prompt overhaul**: teach painter's-algorithm z-order (renderer.py:65
    paints parts in list order — the model is never told); fills ON for 3D;
    replace/augment Example D with an example whose parts **overlap and
@@ -104,6 +99,31 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **D1 — routing + validation repair — DONE, live-verified (2026-06-12).**
+  Built by two parallel Sonnet subagents (disjoint files), merged + verified
+  on the main thread. 148 tests (was 115), ruff+mypy clean, fast path p95
+  0.088 ms (unchanged).
+  - **Routing** (`classify.py`): new `_3D_INTENT_RE` ("3d"/"3-d"/"iso(metric)"/
+    "three[- ]dimensional") joins `_RELATION_RE` in the `hazy` clause — any 3D
+    token caps a rules match at 0.5 so the cascade escalates. Template hits
+    preserved: "a 3D box" → template synonym "3d box"→cuboid, **isometric
+    3-shaded-face cuboid at conf 0.90 in 0.02 s live** (was: flat rect 0.85,
+    LLM never consulted). +10 tests (`test_d1_routing.py`).
+  - **Validation repair** (`llm.py`): pipeline is now **clamp → validate →
+    salvage → one corrective retry → NOOP** (was: any error → silent NOOP).
+    `_repair_geometry_dict` clamps x/y/points 0..100 etc. pre-validation
+    (domain validators stay strict — the LLM stage repairs its own input);
+    `_salvage_group_parts` drops rotten parts, keeps groups with ≥1 survivor,
+    logs drops; `_corrective_retry` feeds the pydantic error back ONCE (no
+    retry-on-retry; worst case 4 HTTP calls incl. 429 retries); explicit
+    `max_tokens` via `QUORUM_LLM_MAX_TOKENS` (default 4096; Ollama
+    `num_predict`). Path `d` data intentionally NOT clamped (would corrupt
+    curves — pathdata stays the gatekeeper). +21 tests
+    (`test_d1_validation.py`).
+  - Live escalation probe: "a 3D engine with pistons" → stage=llm 2.11 s,
+    extends the scene with named pistons. ⚠️ It chose MODIFY of the focused
+    box, not CREATE — the create-vs-modify rule (Example E) still slips;
+    folded into D2's prompt set alongside the copy-verbatim gap.
 - **Tangency segment FINISHED: live re-probe passed, committed (2026-06-12).**
   First live probe FAILED usefully: the LLM re-emitted the focused circle blown
   up to the full 100x100 box (r=50 touching every edge), and a 45° tangent of
@@ -493,6 +513,9 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-11 | Exact geometric relations: **model proposes, code disposes** — `relations.py` snaps tangency deterministically after validation; ONE relation word makes a rules match hazy | A live tangent came back 7 units off; LLMs don't do arithmetic. Snapping preserves the model's intent (direction/side/length) and only fixes the perpendicular offset. Kept surgical: other relations stay prompt-guided until a live failure motivates them |
 | 2026-06-11 | The exploded-view fix is a **program (plan.md §11 D1–D5), not a model swap** — prompt/routing/validation first, deterministic isometric projection (D3) as the centerpiece | Diagnosis traced 5 of 6 ranked root causes to our own code (decompose recipe, untaught z-order, cube-only 3D guidance, invisible "3d" token, all-or-nothing validation). Asking an LLM to do projection math token-by-token is the model-bound part — so the code does the projection, the LLM only places axis-aligned 3D primitives |
 | 2026-06-11 | Model upgrades are **tiered** (fast Groq/Cerebras tier + escalation Gemini Flash/Sonnet tier + offline batch tier), gated on OUR adherence eval (D4) | At ~1.5k output tokens only Groq/Cerebras-class hosts fit the 1–2 s live budget; frontier models (SVGBench leaders) take 12–30 s — fine for an escalation tier with streaming, not for the default. Never swap defaults on benchmarks we didn't run (the 70b quota lesson) |
+| 2026-06-12 | Tangency snap **shortens** the line to the box chord around the touch point when sliding can't fit it (`_shorten_into_box`, min 5 units) | Live failure: LLM emitted a box-filling circle; no 45° tangent of the emitted length fits 0..100, so the old pass-through shipped a center chord. Tangency is the meaning; length is incidental |
+| 2026-06-12 | LLM output is **repaired, not rejected**: clamp coords pre-validation, salvage groups minus rotten parts, ONE corrective retry with the pydantic error — but domain validators stay strict | All-or-nothing validation selected for timid flat drawings (diagnosis root cause 6). Repair lives in the LLM stage (model proposes, code disposes); the domain contract is unchanged for every other caller |
+| 2026-06-12 | 3D escalation = explicit `_3D_INTENT_RE` in the hazy clause, not relaxing the `len(t) > 2` token filter | A targeted regex catches "3-d"/"three dimensional" variants the length filter never could, and doesn't risk flooding the coverage heuristic with short stopword-ish tokens |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly

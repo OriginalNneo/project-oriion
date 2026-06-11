@@ -13,15 +13,29 @@ Backends (chosen by ``QUORUM_LLM_BACKEND``):
 Fault tolerance (plan.md §9): ANY failure — network, timeout, bad JSON,
 validation — degrades to a zero-confidence NOOP, and the cascade falls back to
 the rules result. A dead LLM never takes the loop down.
+
+Validation repair pipeline ("model proposes, code disposes"):
+  1. *Clamp* — out-of-range x/y/width/height/points coordinates are clamped into
+     the 0..100 box rather than rejected; path `d` data is left for the domain
+     validator (clamping individual path numbers would silently corrupt curves).
+  2. *Salvage* — if a group has N parts and only some fail validation after
+     clamping, the bad parts are dropped; the group survives with the rest
+     (requires >= 1 surviving part).
+  3. *Retry* — if the whole payload is still invalid after clamp+salvage, ONE
+     additional LLM call is made with the pydantic error appended as a corrective
+     user message. The existing 429/5xx retry is orthogonal; total worst-case
+     calls per utterance = 2 (rate-limit) x 2 (validation) = 4, but never more.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
+from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from quorum.config.settings import Backend, Settings
 from quorum.domain.geometry import GeometrySpec, ShapeKind
@@ -29,6 +43,11 @@ from quorum.domain.op import ClassifierContext, DesignOp, OpType
 from quorum.observability import get_logger
 
 _log = get_logger("pipeline.llm")
+
+# Maximum tokens requested from the LLM. The IR caps path data at 64 commands /
+# 600 chars and full scenes are a few KB of JSON — 4096 tokens covers it
+# comfortably. Tunable without a code change via QUORUM_LLM_MAX_TOKENS.
+_MAX_TOKENS: int = int(os.environ.get("QUORUM_LLM_MAX_TOKENS", "4096"))
 
 _SYSTEM_PROMPT = """\
 You turn ONE spoken utterance from a live collaborative design session into ONE JSON design operation. Reply with a single JSON object and nothing else.
@@ -90,6 +109,129 @@ Example F — "now draw a line tangent to it" while context.focus_geometry is {"
 """
 
 
+def _clamp(v: float, lo: float, hi: float) -> float:
+    """Return v clamped to [lo, hi]."""
+    return max(lo, min(hi, v))
+
+
+def _repair_geometry_dict(raw: dict[str, Any]) -> dict[str, Any]:
+    """Clamp out-of-range scalar geometry fields in a raw dict in place.
+
+    Only the fields that GeometrySpec validates with ge/le bounds are touched
+    here.  Path `d` data is NOT touched — corrupting individual numbers in a
+    curve would change its shape; the domain validator is the right gatekeeper.
+    Returns the same dict (mutated) for convenience.
+    """
+    # x, y: centers in the 0..100 box
+    for key in ("x", "y"):
+        if isinstance(raw.get(key), (int, float)):
+            raw[key] = _clamp(float(raw[key]), 0.0, 100.0)
+    # width, height: gt=0 le=100 (domain uses gt, so floor at a tiny positive)
+    for key in ("width", "height"):
+        if isinstance(raw.get(key), (int, float)):
+            raw[key] = _clamp(float(raw[key]), 0.001, 100.0)
+    # corner_radius: ge=0 le=50
+    if isinstance(raw.get("corner_radius"), (int, float)):
+        raw["corner_radius"] = _clamp(float(raw["corner_radius"]), 0.0, 50.0)
+    # font_size: gt=0 le=20
+    if isinstance(raw.get("font_size"), (int, float)):
+        raw["font_size"] = _clamp(float(raw["font_size"]), 0.001, 20.0)
+    # stroke_width: gt=0 le=10 (only if present and not None)
+    if isinstance(raw.get("stroke_width"), (int, float)):
+        raw["stroke_width"] = _clamp(float(raw["stroke_width"]), 0.001, 10.0)
+    # polygon points: each coordinate must be in 0..100
+    if isinstance(raw.get("points"), list):
+        clamped_points: list[Any] = []
+        for pt in raw["points"]:
+            if isinstance(pt, (list, tuple)) and len(pt) == 2:
+                clamped_points.append(
+                    [_clamp(float(pt[0]), 0.0, 100.0), _clamp(float(pt[1]), 0.0, 100.0)]
+                )
+            else:
+                clamped_points.append(pt)  # leave malformed points for the validator to reject
+        raw["points"] = clamped_points
+    # recurse into parts
+    if isinstance(raw.get("parts"), list):
+        for part in raw["parts"]:
+            if isinstance(part, dict):
+                _repair_geometry_dict(part)
+    return raw
+
+
+def _salvage_group_parts(raw: dict[str, Any]) -> GeometrySpec | None:
+    """Attempt to salvage a group whose parts fail validation individually.
+
+    Strategy: validate each part independently; keep the ones that pass, drop
+    the rest. A group with >= 1 surviving part is returned; if no parts survive
+    the whole spec is un-salvageable and we return None.
+
+    This only applies to groups — non-group specs with a bad payload cannot be
+    meaningfully salvaged without changing the shape's meaning.
+    """
+    if raw.get("kind") != "group":
+        return None
+    raw_parts: list[Any] = raw.get("parts") or []
+    if not raw_parts:
+        return None
+    good_parts: list[dict[str, Any]] = []
+    for part in raw_parts:
+        if not isinstance(part, dict):
+            continue
+        _repair_geometry_dict(part)
+        try:
+            GeometrySpec.model_validate(part)
+            good_parts.append(part)
+        except (ValidationError, ValueError) as exc:
+            _log.warning(
+                "llm_part_dropped",
+                kind=part.get("kind"),
+                name=part.get("name"),
+                reason=str(exc),
+            )
+    if not good_parts:
+        return None
+    salvaged = {**raw, "parts": good_parts}
+    try:
+        return GeometrySpec.model_validate(salvaged)
+    except (ValidationError, ValueError):
+        return None
+
+
+def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
+    """Parse the LLM's raw JSON string, applying the clamp+salvage repair pass.
+
+    Returns a validated _LLMPayload, or None if the payload is un-repairable.
+    The domain validators (GeometrySpec) are NOT loosened — we only pre-process
+    the raw dict before handing it to Pydantic.
+    """
+    try:
+        data: dict[str, Any] = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+
+    # Clamp geometry fields before validation
+    if isinstance(data.get("geometry"), dict):
+        _repair_geometry_dict(data["geometry"])
+
+    # First attempt: validate the full payload as-is (post-clamp)
+    try:
+        return _LLMPayload.model_validate(data)
+    except (ValidationError, ValueError):
+        pass
+
+    # Second attempt: salvage — if geometry is a group, try dropping bad parts
+    if isinstance(data.get("geometry"), dict):
+        salvaged_geom = _salvage_group_parts(data["geometry"])
+        if salvaged_geom is not None:
+            try:
+                repaired = {**data, "geometry": salvaged_geom.model_dump(mode="python")}
+                return _LLMPayload.model_validate(repaired)
+            except (ValidationError, ValueError):
+                pass
+
+    return None
+
+
 class _LLMPayload(BaseModel):
     """The strict JSON contract the model must emit (validated, not trusted)."""
 
@@ -125,6 +267,18 @@ def payload_to_op(
         speaker_id=speaker_id,
         utterance_id=utterance_id,
         confidence=payload.confidence,
+        source_stage="llm",
+        raw_text=raw_text,
+    )
+
+
+def _noop(*, speaker_id: str, utterance_id: str, raw_text: str) -> DesignOp:
+    """Zero-confidence NOOP — the graceful degradation result."""
+    return DesignOp(
+        op_type=OpType.NOOP,
+        speaker_id=speaker_id,
+        utterance_id=utterance_id,
+        confidence=0.0,
         source_stage="llm",
         raw_text=raw_text,
     )
@@ -175,7 +329,21 @@ class LLMClassifier:
     ) -> DesignOp:
         try:
             raw = await self._complete(text, context)
-            payload = _LLMPayload.model_validate_json(raw)
+            payload = _parse_and_repair(raw)
+
+            if payload is None:
+                # Repair failed — make ONE corrective retry with the validation
+                # error fed back to the model so it can self-correct.
+                payload = await self._corrective_retry(raw, text, context)
+
+            if payload is None:
+                # Both attempts exhausted — degrade gracefully.
+                _log.warning(
+                    "llm_classify_failed_after_retry",
+                    backend=str(self._backend),
+                )
+                return _noop(speaker_id=speaker_id, utterance_id=utterance_id, raw_text=text)
+
             op = payload_to_op(
                 payload, speaker_id=speaker_id, utterance_id=utterance_id, raw_text=text
             )
@@ -184,14 +352,7 @@ class LLMClassifier:
         except Exception as exc:
             # Degrade, never break the loop: the cascade falls back to rules.
             _log.warning("llm_classify_failed", error=str(exc), backend=str(self._backend))
-            return DesignOp(
-                op_type=OpType.NOOP,
-                speaker_id=speaker_id,
-                utterance_id=utterance_id,
-                confidence=0.0,
-                source_stage="llm",
-                raw_text=text,
-            )
+            return _noop(speaker_id=speaker_id, utterance_id=utterance_id, raw_text=text)
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -234,6 +395,10 @@ class LLMClassifier:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ]
+        return await self._send(messages)
+
+    async def _send(self, messages: list[dict[str, str]]) -> str:
+        """Send a message list to the configured backend; return the raw content string."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             if self._backend is Backend.GROQ:
                 resp = await self._post_with_retry(
@@ -245,6 +410,7 @@ class LLMClassifier:
                         "messages": messages,
                         "temperature": 0,
                         "response_format": {"type": "json_object"},
+                        "max_tokens": _MAX_TOKENS,
                     },
                 )
                 resp.raise_for_status()
@@ -257,12 +423,59 @@ class LLMClassifier:
                     "messages": messages,
                     "format": "json",
                     "stream": False,
-                    "options": {"temperature": 0},
+                    "options": {"temperature": 0, "num_predict": _MAX_TOKENS},
                 },
             )
             resp.raise_for_status()
             ollama_content: str = resp.json()["message"]["content"]
             return ollama_content
+
+    async def _corrective_retry(
+        self,
+        bad_raw: str,
+        text: str,
+        context: ClassifierContext,
+    ) -> _LLMPayload | None:
+        """Feed the bad reply + a corrective prompt back to the model for ONE retry.
+
+        This is the validation-repair retry — orthogonal to the rate-limit retry
+        in ``_post_with_retry``.  The total worst-case call count per utterance is
+        2 (rate-limit) x 2 (validation) = 4, but no retry-on-retry explosion is
+        possible because this method never calls itself.
+        """
+        user = self._user_payload(text, context)
+        # Try to extract the pydantic error message from the bad payload so the
+        # model knows exactly what to fix.
+        try:
+            _LLMPayload.model_validate_json(bad_raw)
+            error_hint = "The JSON did not conform to the expected schema."
+        except Exception as exc:
+            error_hint = str(exc)[:400]  # keep it short; the model only needs the gist
+
+        corrective_message = (
+            f"Your previous reply was invalid. Error: {error_hint}\n"
+            "Please reply with a corrected JSON object that satisfies the schema. "
+            "All coordinates must be numbers in the range 0..100. "
+            "Return ONLY the JSON object, nothing else."
+        )
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": bad_raw},
+            {"role": "user", "content": corrective_message},
+        ]
+        try:
+            raw2 = await self._send(messages)
+        except Exception as exc:
+            _log.warning("llm_corrective_retry_failed", error=str(exc))
+            return None
+
+        payload = _parse_and_repair(raw2)
+        if payload is None:
+            _log.warning("llm_corrective_retry_still_invalid", backend=str(self._backend))
+        else:
+            _log.info("llm_corrective_retry_succeeded", backend=str(self._backend))
+        return payload
 
     @staticmethod
     async def _post_with_retry(
