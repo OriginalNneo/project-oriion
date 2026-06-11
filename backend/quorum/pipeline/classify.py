@@ -27,6 +27,7 @@ from quorum.domain.geometry import GeometrySpec, ShapeKind, apply_modifiers
 from quorum.domain.messages import DemoOpMessage
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
 from quorum.observability.latency import stage_timer
+from quorum.pipeline.intent import _3D_INTENT_RE
 from quorum.pipeline.interfaces import Classifier
 
 # Shape keyword table. Phase 4 moves the long tail to embeddings/LLM.
@@ -122,17 +123,6 @@ _RELATION_RE = re.compile(
     r"\b(tangent\w*|tangential|perpendicular|parallel|concentric|inscribed|"
     r"circumscribed|intersect\w*|bisect\w*|touch\w*|midpoint|diagonal\w*|"
     r"degrees?|angle[ds]?|symmetri\w+|mirror\w*|align\w*|equidistant)\b"
-)
-
-# 3-D intent tokens: a shape matched by the flat rules vocabulary while the
-# utterance also signals 3-D perspective must be treated as hazy — the rules
-# stage cannot express isometric geometry, so the cascade must escalate to the
-# template bank (which has exact isometric solids) or the LLM.  The pattern
-# covers the common spoken forms: "3d", "3-d", "isometric", "three dimensional".
-# NOTE: "3d" is two characters so the existing len > 2 filter in
-# _unexplained_words() misses it; a dedicated pattern is more robust.
-_3D_INTENT_RE = re.compile(
-    r"\b(3[-\s]?d|isometric|iso|three[\s-]dimensional)\b"
 )
 
 # Spatial relations for composing a multi-shape SCENE in one node

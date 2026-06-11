@@ -41,6 +41,7 @@ from quorum.config.settings import Backend, Settings
 from quorum.domain.geometry import GeometrySpec, ShapeKind
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
 from quorum.observability import get_logger
+from quorum.pipeline.intent import has_3d_intent
 
 _log = get_logger("pipeline.llm")
 
@@ -74,18 +75,20 @@ GeometrySpec — pick the SIMPLEST kind that expresses the intent:
   - "text": a label. Set "label": "the words" and "font_size": 2..12 (default 4 ≈ 15px). x,y is the text center.
   - "group": a SCENE of several primitives. Put every primitive in "parts" (each with absolute coords in the SAME 0..100 box) and leave the group's own x/y/width/height at defaults. Parts may be any kind EXCEPT group (no nesting). Give meaningful parts a "name".
 
+PAINTER'S Z-ORDER: parts render in list order — later parts are drawn ON TOP of earlier ones. Build back-to-front: backgrounds first, foreground details last. For a filled body with a window: body rectangle first (filled), window on top. This is how occlusion works — embrace it.
+
 Rules:
 - "create" for a new idea; "branch" when it's a variant of the current focus; "modify" to change an existing node (set target_node_id from context); "focus" for preferences (preference_signal: "let's go with"≈1, "maybe"≈0.3, rejection negative); "prune" to remove; "connect" to link two existing nodes; "noop" if it is not a design intent.
-- create vs modify: a NEW standalone object ("a cube", "a smartphone") is "create" — even when a focus exists. Pick "modify" ONLY when the words refer back to the current design: "add ...", "give it ...", "put a ... on it", "make it ...", "now ... to it". When in doubt, create — replacing someone's idea is worse than adding a card.
+- create vs modify: a NEW standalone object ("a cube", "a smartphone", "a 3D engine", "a bicycle") is ALWAYS "create" — even when a focus exists. Only pick "modify" when the words explicitly refer back to the current design using words like "add ...", "give it ...", "put a ... on it", "make it ...", "now ... to it". When in doubt, CREATE — replacing someone's idea is worse than adding a new card.
 - COLOR: "stroke" is the outline; "fill" colors the body. When the speaker asks for color ("a red scarf", "colored in", "fill it in green"), set BOTH per part: fill = the color, fill_style = "solid" (or "hachure" for a sketchy fill), and keep the stroke a darker tone of it. No color mentioned → stroke #1f2937, fill null.
-- 3D look ("a 3D cube", "an isometric box"): draw the 2-3 VISIBLE faces as separate polygons — front face, then top and side as parallelograms sharing its edges, offset up-right. Never draw hidden faces and never stack axis-aligned rectangles for 3D.
+- 3D look ("a 3D X", "isometric X"): draw the 2-3 VISIBLE faces as separate polygons sharing edges — front face, then top and side as parallelograms offset up-right (Example E). Never draw hidden faces and never stack axis-aligned rectangles for 3D. Fills ON, three shades sell the depth: light top (#e5e7eb), medium front (#9ca3af), dark side (#6b7280). For a 3D assembly ("a 3D engine"), every component gets its faces and components OVERLAP into one connected body.
 - GEOMETRIC RELATIONS are exact — compute the numbers, never just place shapes near each other:
   * tangent to a circle (center c, radius r): pick a touch point T = c + r*(cos a, sin a); the line passes through T perpendicular to the radius, i.e. along (-sin a, cos a). Endpoints = T ± L*(-sin a, cos a). The line's distance from c must equal r exactly — it touches at ONE point and never crosses the rim.
   * perpendicular: directions at 90° (dot product 0). parallel: equal directions, offset apart. concentric: identical center, different radii. inscribed: inner shape's rim touches the outer shape from inside. through the center / diameter: the segment passes through c.
   * angles ("at 45 degrees"): direction = (cos 45°, sin 45°) = (0.707, 0.707); remember y grows DOWNWARD, so "up at 45°" is (0.707, -0.707).
 - Resolve references like "the circle" or "the second one" against context.candidates and set target_node_id.
-- EXTENDING the current design ("add five thrusters", "give it a chimney", "put a hat on it"): emit op_type "modify" with target_node_id = context.focus_node_id and geometry = the COMPLETE new scene as a group — copy every part from context.focus_geometry unchanged (keep their names and coordinates), then append the new parts. Never send only the new parts: your geometry REPLACES the node's geometry entirely.
-- For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part, then position the parts coherently in the 0..100 box. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
+- EXTENDING the current design ("add five thrusters", "give it a chimney", "put a hat on it"): emit op_type "modify" with target_node_id = context.focus_node_id and geometry = the COMPLETE new scene as a group. Copy EVERY existing part from context.focus_geometry BYTE-FOR-BYTE — same kind, same name, same x, same y, same width, same height, same points (every number must be identical). Only add new parts at the end. Never change any number of any existing part. Your geometry REPLACES the node's geometry entirely — omitting a part deletes it.
+- For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part. Parts ATTACH and OVERLAP — neighbouring parts' boxes share area or at least an edge (a snowman = three circles stacked and overlapping); never lay components out disjoint side-by-side — that is an exploded blueprint, not a sketch. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
 - context.reference_sketches: known-good geometry for concepts the utterance mentions, mined from real human drawings. When present, ADAPT the reference — reposition, rescale, recolor, combine with other parts — instead of inventing the concept from scratch. References are drawn full-canvas: shrink them when they are only one part of a larger scene.
 - Compose generously and use the RICH primitives — favor polygon/path/text over stacks of rectangles when they capture the shape better. Keep every coordinate inside 0..100 and the result visually coherent and centered.
 
@@ -106,12 +109,37 @@ Example E — "a 3D cube" (CREATE a new idea even though a focus exists; isometr
 
 Example F — "now draw a line tangent to it" while context.focus_geometry is {"kind":"circle","name":"circle","x":40,"y":55,"width":44,"height":44} (center (40,55), r=22). Touch point at angle -45°: T = (40+22*0.707, 55-22*0.707) = (55.6,39.4); the tangent runs along (0.707,0.707), endpoints T ± 28 in that direction. Distance from (40,55) to the line = 22 = r, exactly:
 {"op_type":"modify","target_shape":"group","target_node_id":"n2","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.88,"geometry":{"kind":"group","x":50,"y":50,"width":80,"height":70,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"circle","name":"circle","x":40,"y":55,"width":44,"height":44,"corner_radius":0,"stroke":"#1f2937","parts":[]},{"kind":"path","name":"tangent-line","x":55.6,"y":39.4,"width":39.6,"height":39.6,"corner_radius":0,"stroke":"#b91c1c","d":"M 35.8 19.6 L 75.4 59.2","parts":[]}]}}
+
+Example G — "a coffee mug with steam, colored in" (CREATE; parts attach & overlap, painter's z-order: body first, the coffee surface painted ON TOP of the body's rim, handle overlapping the body's right edge, steam touching the rim):
+{"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.85,"geometry":{"kind":"group","x":50,"y":50,"width":60,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"rectangle","name":"body","x":46,"y":60,"width":28,"height":30,"corner_radius":2,"stroke":"#1f2937","fill":"#f3f4f6","fill_style":"solid","parts":[]},{"kind":"ellipse","name":"coffee","x":46,"y":45,"width":24,"height":6,"corner_radius":0,"stroke":"#1f2937","fill":"#92400e","fill_style":"solid","parts":[]},{"kind":"path","name":"handle","x":66,"y":60,"width":16,"height":24,"corner_radius":0,"stroke":"#1f2937","d":"M 58 50 C 74 48 74 72 58 70","parts":[]},{"kind":"path","name":"steam","x":43,"y":34,"width":10,"height":20,"corner_radius":0,"stroke":"#9ca3af","d":"M 42 44 C 38 38 48 32 44 24","parts":[]}]}}
 """
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     """Return v clamped to [lo, hi]."""
     return max(lo, min(hi, v))
+
+
+def _split_concatenated_pair(value: Any) -> list[float] | None:
+    """Recover a `[3040]` points entry as `[30, 40]` — a live llama-4-scout
+    malformation: the comma between a coordinate pair gets dropped, fusing
+    the two numbers. Only fires when the digits split UNIQUELY into two valid
+    coordinates (each 0..100, no leading zeros) — ambiguity means we leave it
+    for the validator to reject rather than guess.
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    if value != int(value) or not 100 < value:  # a legal lone coord can't split
+        return None
+    digits = str(int(value))
+    candidates: list[list[float]] = []
+    for cut in range(1, len(digits)):
+        a, b = digits[:cut], digits[cut:]
+        if (a != "0" and a.startswith("0")) or (b != "0" and b.startswith("0")):
+            continue
+        if int(a) <= 100 and int(b) <= 100:
+            candidates.append([float(a), float(b)])
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _repair_geometry_dict(raw: dict[str, Any]) -> dict[str, Any]:
@@ -143,6 +171,8 @@ def _repair_geometry_dict(raw: dict[str, Any]) -> dict[str, Any]:
     if isinstance(raw.get("points"), list):
         clamped_points: list[Any] = []
         for pt in raw["points"]:
+            if isinstance(pt, (list, tuple)) and len(pt) == 1:
+                pt = _split_concatenated_pair(pt[0]) or pt
             if isinstance(pt, (list, tuple)) and len(pt) == 2:
                 clamped_points.append(
                     [_clamp(float(pt[0]), 0.0, 100.0), _clamp(float(pt[1]), 0.0, 100.0)]
@@ -377,14 +407,18 @@ class LLMClassifier:
                     ),
                     # Known-good sketches for concepts the utterance mentions
                     # (mined from real drawings) — the model adapts, not invents.
-                    "reference_sketches": [
-                        {
-                            "name": name,
-                            "geometry": spec.model_dump(mode="json", exclude_defaults=True),
-                        }
-                        for name, _, spec in match(text, limit=2)
-                    ]
-                    or None,
+                    # Flat QuickDraw doodles fight 3D intent, so suppress them.
+                    "reference_sketches": (
+                        None  # flat doodles fight 3D intent — suppress them
+                        if has_3d_intent(text)
+                        else [
+                            {
+                                "name": name,
+                                "geometry": spec.model_dump(mode="json", exclude_defaults=True),
+                            }
+                            for name, _, spec in match(text, limit=2)
+                        ] or None
+                    ),
                 },
             }
         )
