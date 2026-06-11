@@ -82,6 +82,39 @@ _PRUNE_RE = re.compile(r"\b(remove|delete|scrap|discard|prune)\b|get rid of")
 _CONNECT_RE = re.compile(r"\b(connect|link|attach)\b")
 _DEICTIC_RE = re.compile(r"\b(that|this|it)\b")  # "scrap that" -> the focus
 
+# Words the rules vocabulary "explains": grammar/filler plus every word the
+# tables above can act on. Anything else in an utterance ("funnel",
+# "thrusters", "snowman") is meaning the rules stage CANNOT express — two or
+# more such words and a matched op is emitted *below* the cascade threshold,
+# so the LLM stage takes over while the rules result stays as the fallback.
+_STOPWORDS = frozenset(
+    """
+    a an the and or but with of to for from into onto by at as is are was be
+    it its that this these those there here one ones two three four five six
+    seven eight nine ten i we you they he she us our my your me him her them
+    want wants wanted like need needs maybe please okay ok lets let go going
+    make makes making turn turned turning put puts putting draw draws drawing
+    add adds added adding give gives have has had how what which who when
+    where why side sides top bottom left right middle center over under above
+    below beneath underneath inside within next then also just really very
+    kind sort bit little big small new old again more less so if can could
+    would should shall will do does did not no yes don dont up down out off
+    front back around about instead version variant another get rid
+    """.split()
+)
+_KNOWN_WORDS: frozenset[str] = frozenset(
+    _STOPWORDS
+    | set(_SHAPE_WORDS)
+    | _MODIFIER_WORDS
+    | set(_COLOR_WORDS)
+    | {w for phrase, _ in _PREFERENCE_PHRASES for w in phrase.replace("'", " ").split()}
+    | {"remove", "delete", "scrap", "discard", "prune", "connect", "link", "attach", "radius"}
+)
+# Confidence for a matched-but-hazy op: below the default escalation threshold
+# (0.55) so the cascade asks the LLM, yet non-zero so a dead LLM still falls
+# back to this op instead of dropping the utterance.
+_HAZY_CONFIDENCE = 0.5
+
 # Spatial relations for composing a multi-shape SCENE in one node
 # ("a circle with a square on top" is one idea, not two).
 _STACK_RE = re.compile(r"\bon top\b|\babove\b|\bover\b")
@@ -184,6 +217,10 @@ class RulesClassifier:
                 return op(op_type=OpType.PRUNE, target_node_id=target, confidence=0.8)
 
         modifiers = self._find_modifiers(lowered)
+        # ≥2 content words the rules can't express ("rocket … thrusters") means
+        # a matched shape word is probably one PART of a richer intent: emit
+        # the match below the cascade threshold so the LLM stage handles it.
+        hazy = len(self._unexplained_words(lowered)) >= 2
 
         # 4) modify a *named existing* node ("make the circle bigger/red").
         # The definite article is the discriminator: "the circle" refers to an
@@ -211,7 +248,7 @@ class RulesClassifier:
                 target_node_id=focus_node_id if is_branch else None,
                 modifiers=modifiers,
                 geometry=apply_modifiers(scene, modifiers),
-                confidence=0.75,
+                confidence=_HAZY_CONFIDENCE if hazy else 0.75,
             )
 
         # 6) shape word -> CREATE or BRANCH (branch when a variant is implied
@@ -226,7 +263,7 @@ class RulesClassifier:
                 target_node_id=focus_node_id if is_branch else None,
                 modifiers=modifiers,
                 geometry=geom,
-                confidence=0.85,
+                confidence=_HAZY_CONFIDENCE if hazy else 0.85,
             )
 
         # 7) bare modifier ("make it bigger") -> MODIFY the focus
@@ -323,6 +360,11 @@ class RulesClassifier:
                 for i, (_, word, kind) in enumerate(mentions)
             ],
         )
+
+    @staticmethod
+    def _unexplained_words(text: str) -> list[str]:
+        """Content words the rules vocabulary cannot account for."""
+        return [t for t in re.findall(r"[a-z]+", text) if len(t) > 2 and t not in _KNOWN_WORDS]
 
     @staticmethod
     def _find_definite_shape(text: str) -> ShapeKind | None:

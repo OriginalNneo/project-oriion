@@ -5,7 +5,7 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-10  ·  **Current phase:** Phase 1a — Voice MVP ✅ **live-mic reviewed** (human spot-check on localhost Chrome: works/"perfect"). Review finding — needs **richer geometry** — **addressed**: LLM stage C is now ON (Groq) and emits the IR v2 polygon/path/text primitives; verified live server-side. **Pending:** human browser live-confirm that intricate scenes render client-side (the one thing the agent can't observe).
+> **Last updated:** 2026-06-11  ·  **Current phase:** Phase 1a — Voice MVP ✅, richer geometry ON (Groq, IR v2), and now **scene extension + smarter escalation**: "a funnel on its side… add 5 thrusters" reaches the LLM (coverage heuristic) and MODIFY can extend the focused scene (LLM sees `focus_geometry`, engine accepts replacement geometry). **Pending:** human browser live-confirm of intricate scenes + extension; QuickDraw template library queued (§4).
 
 ---
 
@@ -14,9 +14,10 @@
 toggle → browser speech → `utterance` → rules→**LLM cascade** → engine → idea
 tree *with derivation edges* → display. Geometry IR v2 (polygon/path/text) on
 both renderers; **LLM stage C (Groq) ON** and emitting those primitives for
-open-ended scenes ("a star", "a house", "a robot"). All checks green (ruff, mypy
-strict, **89 backend tests**, tsc, vite build); fast path p95 0.113 ms, LLM
-classify ~1.0/1.8 s (§7).
+open-ended scenes ("a star", "a house", "a robot"), and scenes are now
+*extendable* ("add five thrusters") with rich utterances escalating reliably.
+All checks green (ruff, mypy strict, **98 backend tests**, tsc, vite build);
+fast path p95 0.111 ms, LLM classify ~1.0/1.8 s (§7).
 
 ## 2. Current focus
 - [x] Phase 0: prove the loop — participant client → WS → Design State Engine →
@@ -31,6 +32,52 @@ classify ~1.0/1.8 s (§7).
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Scene extension + smarter escalation — DONE.** Review ask: "a funnel on its
+  side, then we add 5 thrusters" must work, and rich utterances must not be
+  flattened by a lucky rules match. All checks green: ruff, mypy strict, **98
+  backend tests** (was 89), latency e2e p95 0.111 ms (no regression).
+  - `domain/op.py` — `ClassifierContext.focus_geometry` (the focused node's
+    current `GeometrySpec`) so stage C can *extend* a scene, read-only.
+  - `engine/state.py` — `classifier_context()` populates `focus_geometry`
+    (skips pruned focus); `_modify` now honours `op.geometry` as a full scene
+    replacement (LLM re-emits existing parts + new ones), modifiers still fold
+    on top; no-geometry MODIFY unchanged.
+  - `pipeline/classify.py` — coverage heuristic: `_unexplained_words()` counts
+    content words outside the rules vocabulary (`_KNOWN_WORDS` = stopwords ∪
+    shape/modifier/color/preference/command words); ≥2 unexplained ("rocket …
+    thrusters") caps a matched CREATE/scene op at `_HAZY_CONFIDENCE` 0.5 —
+    below the 0.55 cascade threshold, so the LLM takes it while the rules op
+    stays as the dead-LLM fallback. 1 unknown word stays fast (no LLM tax).
+  - `pipeline/llm.py` — user message now carries `focus_geometry`
+    (`exclude_defaults` dump); prompt gains the extend-scene rule (modify =
+    COMPLETE new group, copy existing parts verbatim), a decompose-into-named-
+    parts instruction (Chat2SVG-style), orientation guidance ("on its side" →
+    emit rotated silhouette), and worked Example D (sideways funnel + 5
+    thrusters → modify).
+  - `tests/test_scene_extension.py` — escalation (rich utterance → LLM; "a red
+    circle" stays fast; 1 unknown word stays fast; dead-LLM falls back to the
+    basic shape), engine geometry-replacing MODIFY, focus_geometry in context,
+    Example D pinned through validation + renderer.
+  - ⚠️ Harness gotcha: the full suite appeared to "hang" at
+    `test_op_from_participant_reaches_display` — root cause was a pile of
+    half-killed `pytest -q` zombie processes from *previous agent sessions*.
+    After `pkill -f "pytest -q"` the suite runs in 0.36 s. Kill zombies before
+    diagnosing "slow tests".
+- **HF dataset research (for even richer drawings) — done, not yet built.**
+  Question: is there a dataset mapping object names → simple vector drawings we
+  can use? Answer: yes — recommendation is a **local template library mined
+  from Google QuickDraw** (`google/quickdraw` on HF: CC-BY-4.0, 50M stroke
+  drawings, 345 everyday-object categories incl. "snowman"; strokes are
+  polylines in a 0..255 box → trivially rescale to our polygon/path IR).
+  Runners-up: FIGR-8-SVG (1.45M monochrome icons, 17k classes, license murky
+  for redistribution — private prompt-bank use only) and OmniSVG MMSVG-Icon
+  (904k captioned picosvg-simplified SVGs, CC-BY-NC — fine for research, not
+  commercial). MMSVGBench (300 text→SVG prompts) is a ready eval set.
+  Technique (per Chat2SVG/SVGenius findings): **retrieval-augmented few-shot**
+  — offline script mines one canonical template per concept into our IR JSON;
+  at request time, fuzzy-match utterance nouns and inject 1–2 matched templates
+  as extra few-shot examples in the Groq prompt (~0 added latency). Exact
+  single-object hits ("a snowman") can skip the LLM entirely. Queued in §4.
 - **LLM stage C turned ON for intricate geometry (review finding addressed).**
   The "can't draw complicated shapes" gap is closed end to end:
   - `pipeline/llm._SYSTEM_PROMPT` rewritten to teach the **Geometry IR v2
@@ -186,10 +233,20 @@ _(append-only-ish; newest at top)_
    - **Live-confirm in the browser:** human refreshes the Participant tab and
      speaks "a star", "a house with two windows", "a robot" — confirm the
      sketch tab draws them (this is the one thing the agent can't observe).
-3. **Phase 1b — server STT:** client mic capture (Web Audio → 16 kHz PCM over
+     **Add to the script:** "a funnel turned on its side" → "now add five
+     thrusters" (tests the new scene-extension path) and "a rocket with a box
+     body and fins" (tests the escalation heuristic).
+3. **QuickDraw template library (retrieval-augmented few-shot).** Offline
+   `scripts/mine_templates.py`: pull `google/quickdraw` simplified drawings
+   (CC-BY-4.0), top-recognized drawing per category, rescale 0..255→0..100,
+   emit IR JSON; hand-curate ~50 concepts (snowman, rocket, funnel, tree…).
+   Runtime: fuzzy-match utterance nouns → inject 1–2 templates as few-shot
+   into the Groq prompt; exact single-object match with no modifiers can skip
+   the LLM (0 ms vs ~1–2 s). Doubles as eval fixtures (MMSVGBench for eval).
+4. **Phase 1b — server STT:** client mic capture (Web Audio → 16 kHz PCM over
    WS) → Silero VAD (`VAD`) → faster-whisper (`Transcriber`) → same tail. Wire
    `QUORUM_STT_BACKEND=local`; extend the latency harness with STT/VAD rows.
-4. Phase 2 — idea tree polish (smarter sibling layout, label nodes, undo via
+5. Phase 2 — idea tree polish (smarter sibling layout, label nodes, undo via
    the now-tested event log).
 
 ## 5. Decisions log
@@ -221,6 +278,9 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-10 | PATH = constrained SVG `d`: absolute uppercase commands only (M L H V C Q A Z), 0..100 box, command/number caps | Lowercase/relative is the LLM's most common malformation and would make "scale about center" a stateful rewrite; rejecting > guessing. Renderers map the *numbers* through their viewport (no SVG `transform`, which would scale rough.js stroke + wobble) — `pathdata.transform` Python, `pathdata.ts` mirror |
 | 2026-06-10 | LLM stage C ON (Groq `llama-3.3-70b-versatile`) + prompt extended to teach IR v2 polygon/path/text | Live-mic review finding: the loop couldn't draw intricate shapes. 70b chosen over `llama-3.1-8b-instant` (richer geometry, reliable JSON mode, ~1 s on Groq) and over `gpt-oss-120b` (reasoning model → JSON-mode/latency risk). Verified live: star/arrow→polygon, house/robot→mixed groups, all render. Only rules-NOOP utterances escalate, so median latency is untouched |
 | 2026-06-10 | Server renderer (clean reference) renders HACHURE & SOLID as flat fill, NONE as no fill; client does the real hachure via rough.js | Server can't hachure and isn't meant to (plan §7 — sketchy look is the client's job); both sides honour `fill_style`/`stroke_width`/`font_size` with shared constants (4 units ≈ 15px) so intent stays identical |
+| 2026-06-11 | Coverage heuristic: ≥2 content words outside the rules vocabulary cap a matched op at 0.5 (below the 0.55 cascade threshold) | "a rocket with a box body and 5 thrusters" matched "box" at 0.85 and the LLM never saw the rich intent. Capping (not NOOPing) keeps the basic shape as the dead-LLM fallback; 1 unknown word stays fast so common utterances don't pay the ~1 s LLM tax |
+| 2026-06-11 | Scene extension = LLM re-emits the COMPLETE group on MODIFY; engine honours `op.geometry` as replacement; `ClassifierContext.focus_geometry` shows the LLM the current scene | "add five thrusters" needs the model to see what exists. Full-replacement beats a part-patch protocol: no new op semantics, replay/event-sourcing untouched, and validation stays one GeometrySpec. Engine remains sole writer |
+| 2026-06-11 | Template library source = Google QuickDraw (CC-BY-4.0), retrieval-augmented few-shot at runtime; FIGR-8/MMSVG only as private references (NC/murky licenses) | Only QuickDraw is license-clean for anything we ship; few-shot injection adds ~0 latency vs fine-tuning/diffusion approaches (Chat2SVG stages 2-3, StarVector, IconShop) that blow the 1-2 s budget |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly

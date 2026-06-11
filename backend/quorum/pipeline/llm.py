@@ -57,6 +57,8 @@ GeometrySpec — pick the SIMPLEST kind that expresses the intent:
 Rules:
 - "create" for a new idea; "branch" when it's a variant of the current focus; "modify" to change an existing node (set target_node_id from context); "focus" for preferences (preference_signal: "let's go with"≈1, "maybe"≈0.3, rejection negative); "prune" to remove; "connect" to link two existing nodes; "noop" if it is not a design intent.
 - Resolve references like "the circle" or "the second one" against context.candidates and set target_node_id.
+- EXTENDING the current design ("add five thrusters", "give it a chimney", "put a hat on it"): emit op_type "modify" with target_node_id = context.focus_node_id and geometry = the COMPLETE new scene as a group — copy every part from context.focus_geometry unchanged (keep their names and coordinates), then append the new parts. Never send only the new parts: your geometry REPLACES the node's geometry entirely.
+- For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part, then position the parts coherently in the 0..100 box. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
 - Compose generously and use the RICH primitives — favor polygon/path/text over stacks of rectangles when they capture the shape better. Keep every coordinate inside 0..100 and the result visually coherent and centered.
 
 Example A — "a five-pointed star" (single exact polygon):
@@ -67,6 +69,9 @@ Example B — "a house with a door and two windows" (group mixing rectangle, pol
 
 Example C — "a heart" (smooth path, absolute uppercase commands):
 {"op_type":"create","target_shape":"path","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.88,"geometry":{"kind":"path","x":50,"y":50,"width":60,"height":54,"corner_radius":0,"stroke":"#dc2626","d":"M50 78 C20 56 22 30 40 30 C48 30 50 38 50 42 C50 38 52 30 60 30 C78 30 80 56 50 78 Z","parts":[]}}
+
+Example D — "now add five thrusters" while context.focus_node_id="n3" and context.focus_geometry is a group whose parts contain {"kind":"polygon","name":"funnel-body","points":[[12,28],[12,72],[58,56],[86,52],[86,48],[58,44]],...} (a funnel on its side). Copy the funnel part verbatim, append the thrusters, op is modify:
+{"op_type":"modify","target_shape":"group","target_node_id":"n3","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.85,"geometry":{"kind":"group","x":50,"y":50,"width":90,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"polygon","name":"funnel-body","x":50,"y":50,"width":74,"height":44,"corner_radius":0,"stroke":"#1f2937","points":[[12,28],[12,72],[58,56],[86,52],[86,48],[58,44]],"parts":[]},{"kind":"rectangle","name":"thruster-1","x":7,"y":32,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-2","x":7,"y":41,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-3","x":7,"y":50,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-4","x":7,"y":59,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-5","x":7,"y":68,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]}]}}
 """
 
 
@@ -177,6 +182,13 @@ class LLMClassifier:
                         {"node_id": c.node_id, "shape": str(c.shape) if c.shape else None}
                         for c in context.candidates
                     ],
+                    # The focused node's current scene, so "add five thrusters"
+                    # can re-emit it extended. exclude_defaults keeps it small.
+                    "focus_geometry": (
+                        context.focus_geometry.model_dump(mode="json", exclude_defaults=True)
+                        if context.focus_geometry is not None
+                        else None
+                    ),
                 },
             }
         )

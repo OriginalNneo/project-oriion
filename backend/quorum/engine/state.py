@@ -82,9 +82,14 @@ class DesignStateEngine:
     def classifier_context(self) -> ClassifierContext:
         """The minimal, read-only tree view the classifier needs to resolve a
         named/relational reference (e.g. "the triangle"). The engine stays the
-        sole state owner; the classifier only reads ids + shapes."""
+        sole state owner; the classifier only reads ids + shapes (plus the
+        focused node's geometry, so the LLM stage can extend a scene)."""
+        focus = self._nodes.get(self._focus_id) if self._focus_id else None
+        if focus is not None and focus.status == NodeStatus.PRUNED:
+            focus = None
         return ClassifierContext(
             focus_node_id=self._focus_id,
+            focus_geometry=focus.geometry if focus else None,
             candidates=[
                 NodeRef(
                     node_id=n.id,
@@ -195,7 +200,11 @@ class DesignStateEngine:
         if node is None:
             _log.debug("modify_no_target", utterance_id=op.utterance_id)
             return None
-        new_geom = self._apply_modifiers(node.geometry, op)
+        # An op may carry replacement geometry (the LLM stage re-emits the full
+        # scene to extend it — "add five thrusters"); textual modifiers still
+        # fold on top. Without geometry, modify keeps mutating in place.
+        base_geom = op.geometry if op.geometry is not None else node.geometry
+        new_geom = self._apply_modifiers(base_geom, op)
         node.geometry = new_geom
         node.svg = self._render(new_geom, op.utterance_id)
         self._record(EventType.NODE_MODIFIED, op, node)
