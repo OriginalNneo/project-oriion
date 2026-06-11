@@ -5,16 +5,18 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-10  ·  **Current phase:** Phase 1a — Voice MVP ✅ (built; ready for live-mic review). Geometry IR v2 (polygon/path/text primitives) landed on top, both renderers green.
+> **Last updated:** 2026-06-10  ·  **Current phase:** Phase 1a — Voice MVP ✅ **live-mic reviewed** (human spot-check on localhost Chrome: works/"perfect"). Review finding — needs **richer geometry** — **addressed**: LLM stage C is now ON (Groq) and emits the IR v2 polygon/path/text primitives; verified live server-side. **Pending:** human browser live-confirm that intricate scenes render client-side (the one thing the agent can't observe).
 
 ---
 
 ## 1. One-line status
-**Voice MVP (plan.md §1.1) built end to end.** Mic toggle → browser speech →
-`utterance` → hardened rules classifier → engine → idea tree *with derivation
-edges* → display. All checks green (ruff, mypy strict, **85 backend tests**,
-tsc, vite build); fast path p95 0.087 ms. Geometry IR v2 (polygon/path/text)
-since landed on both renderers.
+**Voice MVP (plan.md §1.1) built end to end, now drawing intricate shapes.** Mic
+toggle → browser speech → `utterance` → rules→**LLM cascade** → engine → idea
+tree *with derivation edges* → display. Geometry IR v2 (polygon/path/text) on
+both renderers; **LLM stage C (Groq) ON** and emitting those primitives for
+open-ended scenes ("a star", "a house", "a robot"). All checks green (ruff, mypy
+strict, **89 backend tests**, tsc, vite build); fast path p95 0.113 ms, LLM
+classify ~1.0/1.8 s (§7).
 
 ## 2. Current focus
 - [x] Phase 0: prove the loop — participant client → WS → Design State Engine →
@@ -22,11 +24,54 @@ since landed on both renderers.
 - [x] Phase 1a: the MVP — voice input (Web Speech API), classifier vocabulary
       (create/branch/modify/focus/prune/connect/colors), tree layout with
       derivation edges, engine event-sourcing fixes + replay.
-- [ ] **Review checkpoint** (RULES.md §3): human review **with a real mic on
-      localhost Chrome** before Phase 1b/2 (agent cannot exercise a microphone).
+- [x] **Review checkpoint** (RULES.md §3): human ran the MVP with a real mic on
+      localhost Chrome — verdict "perfect"; finding = needs richer geometry.
+- [x] Richer geometry: LLM stage C (Groq) ON, emits IR v2 polygon/path/text;
+      verified live server-side. *Pending human browser live-confirm (§4).*
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **LLM stage C turned ON for intricate geometry (review finding addressed).**
+  The "can't draw complicated shapes" gap is closed end to end:
+  - `pipeline/llm._SYSTEM_PROMPT` rewritten to teach the **Geometry IR v2
+    primitives** — `polygon` (exact `points`), `path` (constrained absolute-
+    uppercase SVG `d`), `text` (`label`+`font_size`) — plus `name`/`stroke_width`/
+    `fill_style`, with three worked examples (star polygon, house group mixing a
+    polygon roof, heart path). The model now reaches for the rich primitives
+    instead of stacking rectangles.
+  - **Live Groq verified** (`llama-3.3-70b-versatile`): "a five-pointed star"→
+    polygon(10pts), "an arrow"→polygon(6pts), "a house with a door and two
+    windows"→group{rect, polygon roof, 3 rects}, "a snowman wearing a top hat"→
+    group{3 circles, path}, "a robot"→group(6). **All validate and render.**
+  - **Backend now runs `QUORUM_LLM_BACKEND=groq`** via `backend/.env` (gitignored).
+    The cascade is unchanged: rules answer confident/basic utterances for free;
+    only rules-NOOP ("a robot") escalate to Groq. A dead LLM still falls back to
+    rules (existing test).
+  - **Tests:** `tests/test_llm_geometry.py` (+4) pins the three prompt examples
+    through `_LLMPayload` validation → `payload_to_op` → renderer, plus a mocked-
+    HTTP `LLMClassifier` path. ruff + mypy strict clean, **89 backend tests** (was
+    85), fast-path latency unchanged (p95 0.113 ms). LLM latency now measured —
+    see §7.
+  - ⚠️ The pasted Groq API key is **in this session's transcript → rotate it**;
+    `.env` holds it locally and is gitignored.
+- **Live-mic review (Phase 1a checkpoint, §4 item 1) — DONE.** Human ran the MVP
+  on localhost Chrome (fresh Vite on :5174, backend :8000, mock STT/LLM) and
+  spot-checked the voice loop: verdict **"right now it's perfect."**
+  - ⚠️ *Scope of the pass:* a spot-check, **not** a confirmed walk of all 8
+    scripted steps. NOT independently observed by the agent: the `fillet`/jargon
+    mangling test (§6 open risk) and the per-step composite/disaffirm/prune
+    behaviors. Treat those as *un-disproven*, not *verified*. Re-test `fillet`
+    if Phase 1b STT quality comes into question.
+  - **Review finding (the deliverable):** the loop works but **can't draw more
+    complicated shapes/designs.** Root cause confirmed against code: the rules
+    classifier only emits basic primitives + groups of them, and the LLM stage C
+    (the only thing that could generate intricate scenes) is OFF by default
+    (`QUORUM_LLM_BACKEND=mock`) AND its prompt doesn't teach the v2
+    polygon/path/text primitives. So intricacy is unreachable in the default
+    config — exactly the gap IR v2 was built to fill.
+  - **Resolves the IR v2 divergence flag (§5).** The user just validated that
+    intricacy is the thing they want next, which retroactively justifies the
+    out-of-queue IR v2 work. The flag is closed; don't re-litigate it.
 - **Geometry IR v2 (intricacy primitives).** ⚠️ *Was off the documented queue
   (§4 said: live-mic review next). Resumed unfinished/uncommitted work from the
   prior session and finished it end to end; flagged per CLAUDE.md §7 — see the
@@ -132,12 +177,19 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
-1. **Live-mic review:** a human runs the MVP on localhost Chrome (and a phone
-   if HTTPS/flag is set up), speaks the §1.1 vocabulary, sanity-checks the tree.
-2. **Phase 1b — server STT:** client mic capture (Web Audio → 16 kHz PCM over
+1. [x] **Live-mic review** — DONE (see §3). Finding: needs richer geometry.
+2. [x] **Richer geometry — DONE via LLM stage C (tier B).** Stage turned ON
+   (Groq) + prompt teaches polygon/path/text; verified live (see §3). The loop
+   now draws intricate scenes. *Tier A (rules-emit polygons for named shapes,
+   zero-latency) is still worth doing* so common shapes (star/hexagon/arrow)
+   don't pay the ~1 s LLM round-trip — optional follow-up.
+   - **Live-confirm in the browser:** human refreshes the Participant tab and
+     speaks "a star", "a house with two windows", "a robot" — confirm the
+     sketch tab draws them (this is the one thing the agent can't observe).
+3. **Phase 1b — server STT:** client mic capture (Web Audio → 16 kHz PCM over
    WS) → Silero VAD (`VAD`) → faster-whisper (`Transcriber`) → same tail. Wire
    `QUORUM_STT_BACKEND=local`; extend the latency harness with STT/VAD rows.
-3. Phase 2 — idea tree polish (smarter sibling layout, label nodes, undo via
+4. Phase 2 — idea tree polish (smarter sibling layout, label nodes, undo via
    the now-tested event log).
 
 ## 5. Decisions log
@@ -167,6 +219,7 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-10 | LLM stage C = Groq/Ollama emitting the same strict-JSON DesignOp+GeometrySpec; cascade escalates only below a confidence threshold; LLM failure → fall back to rules | Plan §3.3 realized: median latency stays rules-fast, complex scenes ("a snowman") become possible, and a dead LLM degrades quality, never availability |
 | 2026-06-10 | **⚠️ DIVERGENCE — built Geometry IR v2 (polygon/path/text + style fields) ahead of the documented queue** (which had live-mic review next) | Picked up unfinished/uncommitted prior-session work and finished it rather than abandon a clean, ~done segment. Flagged per CLAUDE.md §7 — does **not** reorder the queue: live-mic review is still the next checkpoint (§4). Re-confirm with a human whether IR v2 should precede that review |
 | 2026-06-10 | PATH = constrained SVG `d`: absolute uppercase commands only (M L H V C Q A Z), 0..100 box, command/number caps | Lowercase/relative is the LLM's most common malformation and would make "scale about center" a stateful rewrite; rejecting > guessing. Renderers map the *numbers* through their viewport (no SVG `transform`, which would scale rough.js stroke + wobble) — `pathdata.transform` Python, `pathdata.ts` mirror |
+| 2026-06-10 | LLM stage C ON (Groq `llama-3.3-70b-versatile`) + prompt extended to teach IR v2 polygon/path/text | Live-mic review finding: the loop couldn't draw intricate shapes. 70b chosen over `llama-3.1-8b-instant` (richer geometry, reliable JSON mode, ~1 s on Groq) and over `gpt-oss-120b` (reasoning model → JSON-mode/latency risk). Verified live: star/arrow→polygon, house/robot→mixed groups, all render. Only rules-NOOP utterances escalate, so median latency is untouched |
 | 2026-06-10 | Server renderer (clean reference) renders HACHURE & SOLID as flat fill, NONE as no fill; client does the real hachure via rough.js | Server can't hachure and isn't meant to (plan §7 — sketchy look is the client's job); both sides honour `fill_style`/`stroke_width`/`font_size` with shared constants (4 units ≈ 15px) so intent stays identical |
 
 ## 6. Open questions
@@ -183,6 +236,8 @@ _(why we chose what — so we don't relitigate it)_
   `node`/`edge` are already `ShapeKind`s rendered by the one renderer + `connect`
   op exists in the engine. Validate when workflow mode gets real UX.
 - Phase-4 default LLM: local Llama 3.2 3B vs Groq (privacy vs speed) — benchmark.
+  _Current:_ Groq `llama-3.3-70b-versatile` chosen for now (quality + speed);
+  local Ollama path still built/untested. Revisit if privacy/offline is needed.
 - Resolving *non-shape* relational references ("the second one", "Bob's one") —
   rules can't; this is the concrete Phase-4 LLM (stage C) job. `ClassifierContext`
   already carries the candidate `NodeRef`s the LLM will need.
@@ -196,16 +251,17 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
 | Classify (fast) | <0.2 s | **0.02 ms / 0.03 ms** | rules stage incl. scenes/prune/connect/colors |
-| Classify (LLM) | <1.5 s local / <0.8 s Groq | — (built, off by default) | `classify_llm` ledger row fills in once `QUORUM_LLM_BACKEND` is set |
+| Classify (LLM) | <1.5 s local / <0.8 s Groq | **~1.0 s / ~1.8 s** (Groq `llama-3.3-70b-versatile`, 6 intricate utterances) | ON. Simple shapes (star/arrow polygon) ~0.7 s; full scenes ("a robot") ~1.8 s — **over the 0.8 s sub-target for the heavy case**, but only fires on rules-NOOP utterances and stays well inside the 5 s end-to-end budget. Tune model/threshold if the tail bites |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
 | Engine apply | (internal) | **0.03 ms / 0.04 ms** | DAG mutation + event append (incl. new focus/diff bookkeeping) |
 | **End-to-end (server fast path)** | **<5 s** | **0.053 ms / 0.072 ms** | classify+engine+render; the budget is effectively all browser-STT/LLM headroom |
 
-> Read-back: the server-side fast path stayed ~4 orders of magnitude under the
-> 5 s budget after the classifier/engine work (no regression — actually faster
-> than the Phase 0 numbers). In 1a the real human-perceived latency is the
-> browser's own speech recognizer (typically 0.5–1.5 s after end of speech),
-> which only a live-mic session can measure — first item in the queue.
+> Read-back: the server-side fast path stays ~4 orders of magnitude under the
+> 5 s budget. The real human-perceived latency now has two contributors: the
+> browser's speech recognizer (~0.5–1.5 s, client-side, judged "fine" at the
+> live-mic review) and — only for intricate utterances that escalate to stage C
+> — the Groq round-trip (~1–1.8 s). Stacked worst case (~3.3 s) is still inside
+> the 5 s budget; basic utterances never touch the LLM.
 
 ## 8. Glossary
 - **DesignOp** — the structured intent object the classifier emits (see plan §3.3).
@@ -244,6 +300,11 @@ cd frontend && npm run typecheck && npm run build
 # QUORUM_STT_BACKEND=mock|local|groq   QUORUM_LLM_BACKEND=mock|local|groq
 # QUORUM_VAD_BACKEND=mock|local        QUORUM_VAD_SILENCE_MS=300  (latency knob)
 # QUORUM_GROQ_API_KEY=...              QUORUM_WHISPER_MODEL=small
+#
+# NOTE (this session): backend/.env exists (gitignored) with LLM stage C LIVE —
+#   QUORUM_LLM_BACKEND=groq, QUORUM_GROQ_MODEL=llama-3.3-70b-versatile, key set.
+#   ⚠️ The key was pasted into a chat transcript — ROTATE it at console.groq.com.
+#   Frontend dev server may land on :5174 if :5173 is taken (check the vite log).
 ```
 
 ## 10. Phase 1b entry notes (for next session)
