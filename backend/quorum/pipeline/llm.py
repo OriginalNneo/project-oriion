@@ -60,6 +60,10 @@ Rules:
 - create vs modify: a NEW standalone object ("a cube", "a smartphone") is "create" — even when a focus exists. Pick "modify" ONLY when the words refer back to the current design: "add ...", "give it ...", "put a ... on it", "make it ...", "now ... to it". When in doubt, create — replacing someone's idea is worse than adding a card.
 - COLOR: "stroke" is the outline; "fill" colors the body. When the speaker asks for color ("a red scarf", "colored in", "fill it in green"), set BOTH per part: fill = the color, fill_style = "solid" (or "hachure" for a sketchy fill), and keep the stroke a darker tone of it. No color mentioned → stroke #1f2937, fill null.
 - 3D look ("a 3D cube", "an isometric box"): draw the 2-3 VISIBLE faces as separate polygons — front face, then top and side as parallelograms sharing its edges, offset up-right. Never draw hidden faces and never stack axis-aligned rectangles for 3D.
+- GEOMETRIC RELATIONS are exact — compute the numbers, never just place shapes near each other:
+  * tangent to a circle (center c, radius r): pick a touch point T = c + r*(cos a, sin a); the line passes through T perpendicular to the radius, i.e. along (-sin a, cos a). Endpoints = T ± L*(-sin a, cos a). The line's distance from c must equal r exactly — it touches at ONE point and never crosses the rim.
+  * perpendicular: directions at 90° (dot product 0). parallel: equal directions, offset apart. concentric: identical center, different radii. inscribed: inner shape's rim touches the outer shape from inside. through the center / diameter: the segment passes through c.
+  * angles ("at 45 degrees"): direction = (cos 45°, sin 45°) = (0.707, 0.707); remember y grows DOWNWARD, so "up at 45°" is (0.707, -0.707).
 - Resolve references like "the circle" or "the second one" against context.candidates and set target_node_id.
 - EXTENDING the current design ("add five thrusters", "give it a chimney", "put a hat on it"): emit op_type "modify" with target_node_id = context.focus_node_id and geometry = the COMPLETE new scene as a group — copy every part from context.focus_geometry unchanged (keep their names and coordinates), then append the new parts. Never send only the new parts: your geometry REPLACES the node's geometry entirely.
 - For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part, then position the parts coherently in the 0..100 box. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
@@ -80,6 +84,9 @@ Example D — "now add five thrusters" while context.focus_node_id="n3" and cont
 
 Example E — "a 3D cube" (CREATE a new idea even though a focus exists; isometric = 3 visible faces, fill shading sells the depth):
 {"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"geometry":{"kind":"group","x":50,"y":50,"width":60,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"polygon","name":"face-front","x":50,"y":60,"width":36,"height":36,"corner_radius":0,"stroke":"#1f2937","fill":"#9ca3af","fill_style":"solid","points":[[32,42],[68,42],[68,78],[32,78]],"parts":[]},{"kind":"polygon","name":"face-top","x":57,"y":35,"width":50,"height":14,"corner_radius":0,"stroke":"#1f2937","fill":"#e5e7eb","fill_style":"solid","points":[[32,42],[46,28],[82,28],[68,42]],"parts":[]},{"kind":"polygon","name":"face-right","x":75,"y":53,"width":14,"height":50,"corner_radius":0,"stroke":"#1f2937","fill":"#6b7280","fill_style":"solid","points":[[68,42],[82,28],[82,64],[68,78]],"parts":[]}]}}
+
+Example F — "now draw a line tangent to it" while context.focus_geometry is {"kind":"circle","name":"circle","x":40,"y":55,"width":44,"height":44} (center (40,55), r=22). Touch point at angle -45°: T = (40+22*0.707, 55-22*0.707) = (55.6,39.4); the tangent runs along (0.707,0.707), endpoints T ± 28 in that direction. Distance from (40,55) to the line = 22 = r, exactly:
+{"op_type":"modify","target_shape":"group","target_node_id":"n2","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.88,"geometry":{"kind":"group","x":50,"y":50,"width":80,"height":70,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"circle","name":"circle","x":40,"y":55,"width":44,"height":44,"corner_radius":0,"stroke":"#1f2937","parts":[]},{"kind":"path","name":"tangent-line","x":55.6,"y":39.4,"width":39.6,"height":39.6,"corner_radius":0,"stroke":"#b91c1c","d":"M 35.8 19.6 L 75.4 59.2","parts":[]}]}}
 """
 
 
@@ -99,7 +106,14 @@ class _LLMPayload(BaseModel):
 def payload_to_op(
     payload: _LLMPayload, *, speaker_id: str, utterance_id: str, raw_text: str
 ) -> DesignOp:
-    """Stamp a validated LLM payload with provenance to make a real DesignOp."""
+    """Stamp a validated LLM payload with provenance to make a real DesignOp.
+
+    Exact geometric relations the utterance names (tangency) are SNAPPED here:
+    the model supplies intent and rough placement; the arithmetic is ours
+    (a live tangent came back 7 units off — LLMs don't do math).
+    """
+    from quorum.pipeline.relations import snap_relations
+
     return DesignOp(
         op_type=payload.op_type,
         target_shape=payload.target_shape,
@@ -107,7 +121,7 @@ def payload_to_op(
         relation_to_node=payload.relation_to_node,
         modifiers=payload.modifiers,
         preference_signal=payload.preference_signal,
-        geometry=payload.geometry,
+        geometry=snap_relations(raw_text, payload.geometry),
         speaker_id=speaker_id,
         utterance_id=utterance_id,
         confidence=payload.confidence,

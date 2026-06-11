@@ -5,22 +5,57 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-11  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches). **Whole program verified end to end** (real uvicorn + websocket: ALL PASS; frontend builds; 110 tests; fast path p95 0.081 ms). **Pending:** human browser live-confirm; Phase 1b server STT next (§4).
+> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches, **exact-relation snapping — live-verified + committed**). Checks green: ruff, mypy, **115 tests**. **Active program:** Drawing Quality D1–D5 (plan.md §11) — diagnosis done, **D1 next**.
 
 ---
 
 ## 1. One-line status
-**Voice MVP (plan.md §1.1) built end to end, now drawing intricate shapes.** Mic
-toggle → browser speech → `utterance` → rules→**LLM cascade** → engine → idea
-tree *with derivation edges* → display. Geometry IR v2 (polygon/path/text) on
-both renderers; **LLM stage C (Groq) ON** and emitting those primitives for
-open-ended scenes ("a star", "a house", "a robot"), and scenes are now
-*extendable* ("add five thrusters") with rich utterances escalating reliably.
-All checks green (ruff, mypy strict, **98 backend tests**, tsc, vite build);
-fast path p95 0.111 ms, LLM classify ~1.0/1.8 s (§7).
+**Voice MVP (plan.md §1.1) built end to end, drawing intricate shapes; next
+up: make 3D/intricate output actually good (plan.md §11).** Mic toggle →
+browser speech → `utterance` → rules→templates→**LLM cascade** → engine →
+idea tree *with derivation edges* → display. Geometry IR v2 on both
+renderers; **LLM stage C (Groq) ON** with template few-shot, scene extension,
+and deterministic **tangency snapping** (uncommitted — §2 step 1). All checks
+green (ruff, mypy, **114 backend tests**, tsc, vite build); fast path p95
+0.081 ms, LLM classify ~1.0/1.8 s (§7). Known gap: exploded-view 3D — root
+causes diagnosed (§3), fix program planned (plan.md §11).
 
 ## 2. Current focus
-**Active plan (2026-06-11, user effort=high): richer drawing power + whole-program assurance.**
+**Active program (2026-06-11 evening): Drawing Quality D1–D5 — fix the
+"exploded view" 3D failure + weak instruction following. Full design intent in
+plan.md §11; diagnosis details in §3 below.**
+
+**Resume steps (do these in order next session):**
+1. [x] **Exact-relations segment — DONE & COMMITTED** (live re-probe passed
+   2026-06-12; needed one fix first — see §3 top entry).
+2. **D1 — routing + validation repair** (small, no model change): make
+   "3d/isometric" escalate past rules (the `len(t) > 2` filter in
+   `classify.py:383` makes "3d" invisible — "a 3D box" ships a flat rect at
+   conf 0.85); clamp out-of-range coords instead of rejecting; salvage valid
+   parts instead of all-or-nothing NOOP; one retry feeding the pydantic error
+   back; set explicit `max_tokens` (llm.py:243-248 sets none — truncation =
+   silent drop).
+3. **D2 — prompt overhaul**: teach painter's-algorithm z-order (renderer.py:65
+   paints parts in list order — the model is never told); fills ON for 3D;
+   replace/augment Example D with an example whose parts **overlap and
+   occlude**; reword the llm.py:69 decomposition recipe ("parts attach and
+   overlap — never lay components out side-by-side"); suppress flat QuickDraw
+   `reference_sketches` when the utterance says 3D/isometric. Fixed 10-prompt
+   before/after set.
+4. **D3 — deterministic isometric projection** (highest leverage): IR gains
+   `box`/`cylinder`/`wedge` (x,y,z,w,d,h); the pure renderer does the 30°
+   projection + shading + z-sort (generalize `make_isometric.py::_project`).
+   LLM emits axis-aligned 3D placement only — never projection math.
+5. **D4 — adherence eval + tiered models**: extend `eval_llm.py` to score
+   instruction adherence (counts/colors/coherence), benchmark GLM-5 / Kimi
+   K2.5 / Cerebras-hosted Qwen3 & gpt-oss; wire an escalation tier (Gemini 3
+   Flash or Sonnet 4.6) for intricate/3D prompts, streamed.
+6. **D5 (optional)** — async render→VLM-critique→repair polish; frontier-batch
+   template growth; verify TU-Berlin license.
+
+Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT.
+
+**Previous plan (2026-06-11, user effort=high): richer drawing power + whole-program assurance — ALL DONE.**
 1. [x] **Elaborate templates — DONE.** Full official list mined: **345
    templates** (was 139). Selection took three iterations (see §3): max-points
    picked scribbles; pure median picked sloppy-typicals; final = **modal
@@ -69,6 +104,66 @@ fast path p95 0.111 ms, LLM classify ~1.0/1.8 s (§7).
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Tangency segment FINISHED: live re-probe passed, committed (2026-06-12).**
+  First live probe FAILED usefully: the LLM re-emitted the focused circle blown
+  up to the full 100x100 box (r=50 touching every edge), and a 45° tangent of
+  the emitted length fits nowhere in the box — `_slide_into_box` returned None
+  and the uncorrected center-chord passed through. Fix: `_shorten_into_box()`
+  in `relations.py` — when sliding can't fit, clip the tangent segment to the
+  box chord around the touch point (min visible length 5 units). **Tangency is
+  the meaning; the length is incidental.** Re-probe: distance center→line =
+  22.03 vs r=22 — exact within rounding, 45° direction preserved, in-box.
+  115 tests, ruff+mypy clean. ⚠️ Adherence gap logged for D2/D4: the model
+  does NOT copy existing parts verbatim on MODIFY (40x30 circle came back
+  50x50, then 100x100) despite the prompt demanding it — add "copy verbatim"
+  to the D4 adherence eval and the D2 prompt set.
+- **Exploded-view diagnosis + model/dataset research — DONE (plan.md §11 added).**
+  Why 3D/intricate requests render as flat part layouts — ranked, code-verified:
+  1. prompt's decompose recipe + ALL few-shot examples place parts in disjoint
+  regions (llm.py:69, Example B house, Example D thruster column) — an
+  exploded-view algorithm; 2. painter's-algorithm z-order never explained +
+  default `fill: null` → model avoids overlap (transparent overlaps look like
+  crossed wireframes); 3. 3D guidance is cube-only (llm.py:62); 4. routing bug:
+  `_unexplained_words` filters `len(t) > 2` so "3d" is invisible — "a 3D box"
+  → rules CREATE flat rect conf 0.85, LLM never consulted (classify.py:383);
+  5. flat QuickDraw few-shots actively fight 3D requests; 6. all-or-nothing
+  pydantic validation + no `max_tokens` → ambitious output silently NOOPs
+  (llm.py:184-194) — selection pressure for timid flat drawings. The IR itself
+  CAN do occlusion (implicit paint order — the isometric cube proves it);
+  missing: rotation, nesting, gradients; validators reject rather than clamp.
+  Model research (June 2026): SVGBench = Opus 4.6 75.6%, GPT-5.2 74.4%; best
+  open drawers GLM-5 70.3% / Kimi K2.5; only Groq (~450 tok/s) and Cerebras
+  (~3k tok/s) fit the live budget at 1.5k output tokens → tiered strategy
+  (plan.md §11). No isometric dataset exists on HF; TU-Berlin is the one
+  ship-safe candidate (verify CC-BY-4.0); SketchGraphs murky (Onshape ToU).
+  Techniques validated by literature: render→VLM-critique→repair
+  (Render-in-the-Loop '26, IntroSVG '26), scene-graph-then-geometry planning,
+  models repair vector code better than they generate it (SVGenius).
+- **Exact geometric relations (tangency) — BUILT, checks green, UNCOMMITTED;
+  live re-probe pending.** A live "line tangential to the circle" came back 7
+  units off — LLMs don't do arithmetic. Pattern established: **model proposes,
+  code disposes.**
+  - `pipeline/relations.py` (new) — `snap_relations()`: pure function; any
+    straight 2-point path in the emitted group is translated along its own
+    normal to exact tangency with the group's circle (direction/length/side
+    preserved); slides along the line direction if the shift exits the 0..100
+    box; passes through anything it can't confidently fix. Surgical by design —
+    perpendicular/parallel/concentric stay prompt-guided until a live failure
+    motivates snapping them.
+  - `pipeline/llm.py` — `payload_to_op` snaps geometry via `snap_relations`;
+    prompt gains the GEOMETRIC RELATIONS rules (tangent touch-point math,
+    perpendicular/parallel/concentric/inscribed, y-grows-downward angle note)
+    + worked Example F (circle + exact tangent line as MODIFY).
+  - `pipeline/classify.py` — `_RELATION_RE`: ONE relation word (tangent,
+    perpendicular, parallel, concentric, inscribed, bisect, degrees, …) makes
+    a rules match hazy (cap 0.5) — the relation IS the meaning; rules can only
+    place shapes side-by-side.
+  - `tests/test_scene_extension.py` +84 lines: snapping math (both sides,
+    already-tangent no-op, box-slide, non-group/non-circle pass-through),
+    relation-word escalation, Example F pinned through validation + renderer.
+  - **114 tests, ruff + mypy clean.** Pytest-hang note: the "hung suite" bit
+    twice more this session — both times stale zombies; after pkill the suite
+    runs in 0.43 s. The TestClient deadlock theory remains unconfirmed.
 - **Template bank v2: 345 mined + 8 exact isometric (effort=high plan items
   1–2).** 110 tests, latency p95 0.081 ms, frontend tsc+build green.
   - Miner selection lesson (pinned so it isn't relitigated): *max-points
@@ -338,6 +433,8 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
+0. **Resume point: Drawing Quality program D1→D5** (tangency segment done +
+   committed 2026-06-12) — full steps in §2, design intent in plan.md §11.
 1. [x] **Live-mic review** — DONE (see §3). Finding: needs richer geometry.
 2. [x] **Richer geometry — DONE via LLM stage C (tier B).** Stage turned ON
    (Groq) + prompt teaches polygon/path/text; verified live (see §3). The loop
@@ -393,6 +490,9 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-11 | QuickDraw template selection = modal stroke count, then nearest 1.2x median points within the modal group, pts/stroke ≤ 32 | Max-points mines scribbles; pure median mines sloppy-typicals; modal structure is the crowd's canonical decomposition (snowman = 3 strokes). Verified by eyeballing rendered thumbnails |
 | 2026-06-11 | Isometric/3D primitives are COMPUTED templates (scripts/make_isometric.py), not LLM-drawn | A projection is math, not taste: exact 30° isometric + shaded faces beats asking a 1-2 s LLM to improvise one every time; "a 3D cube" is now a 0 ms direct hit. LLM still composes them into scenes via reference_sketches |
 | 2026-06-11 | Keep Groq `llama-3.3-70b-versatile` default; `llama-4-scout-17b-16e-instruct` is the benchmarked fallback | Benchmark's 70b row was quota-corrupted (uniform 429s) — switching on corrupted evidence would be superstition. Scout measured 4/6 valid @ p50 1.8 s AND passed the full e2e as the live stage C; kimi-k2 is gone from Groq (404) |
+| 2026-06-11 | Exact geometric relations: **model proposes, code disposes** — `relations.py` snaps tangency deterministically after validation; ONE relation word makes a rules match hazy | A live tangent came back 7 units off; LLMs don't do arithmetic. Snapping preserves the model's intent (direction/side/length) and only fixes the perpendicular offset. Kept surgical: other relations stay prompt-guided until a live failure motivates them |
+| 2026-06-11 | The exploded-view fix is a **program (plan.md §11 D1–D5), not a model swap** — prompt/routing/validation first, deterministic isometric projection (D3) as the centerpiece | Diagnosis traced 5 of 6 ranked root causes to our own code (decompose recipe, untaught z-order, cube-only 3D guidance, invisible "3d" token, all-or-nothing validation). Asking an LLM to do projection math token-by-token is the model-bound part — so the code does the projection, the LLM only places axis-aligned 3D primitives |
+| 2026-06-11 | Model upgrades are **tiered** (fast Groq/Cerebras tier + escalation Gemini Flash/Sonnet tier + offline batch tier), gated on OUR adherence eval (D4) | At ~1.5k output tokens only Groq/Cerebras-class hosts fit the 1–2 s live budget; frontier models (SVGBench leaders) take 12–30 s — fine for an escalation tier with streaming, not for the default. Never swap defaults on benchmarks we didn't run (the 70b quota lesson) |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly

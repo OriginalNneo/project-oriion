@@ -14,6 +14,12 @@
 >   loop" was defined, but "what is the shippable MVP" was not; and the Web
 >   Speech API gives a real voice path with zero server ML deps, behind the
 >   *same* wire protocol the server STT will use.
+> - 2026-06-11 — added §11 (Drawing-quality program: intricate shapes & true
+>   3D). Reason: live use showed 3D/intricate requests render as "exploded
+>   view" flat layouts and instruction-following is weak. A code-verified
+>   diagnosis traced most of it to our own prompt/routing/validation (not the
+>   model), so the fix is a five-segment program, not a model swap. §11 is the
+>   design intent; the live segment status lives in `context.md` §2/§4.
 
 ---
 
@@ -364,3 +370,66 @@ scaling (STT, classify, render).
 - Workflow mode: shared primitive vocabulary with geometry mode, or separate
   renderers?
 - Local LLM vs. Groq for Phase 4 default (privacy vs. speed) — benchmark both.
+
+---
+
+## 11. Drawing-quality program — intricate shapes & true 3D (2026-06-11)
+
+**The problem.** Live use shows two failure modes: (a) intricate/3D requests
+("a 3D engine with pistons") come back as an **exploded view** — parts laid
+out flat, side by side, instead of a coherent assembly; (b) instruction
+following is weak (counts, colors, exact relations drift).
+
+**The diagnosis (code-verified — full trace in `context.md` §3).** It is
+mostly *not* the model. Ranked root causes:
+1. The stage-C prompt's decompose-into-parts recipe + every few-shot example
+   place parts in **disjoint, non-overlapping regions** — literally an
+   exploded-view algorithm.
+2. The prompt never explains **painter's-algorithm z-order** (parts render in
+   list order; later filled parts occlude), and default `fill: null` makes any
+   overlap look like crossing wireframes — so the model rationally avoids
+   overlap.
+3. 3D guidance exists **only for cubes**; no generalized projection recipe.
+4. **Routing bug**: the coverage heuristic filters tokens of length ≤ 2, so
+   "3d" is invisible — "a 3D box" matches "box" in rules at conf 0.85 and a
+   flat rectangle ships without the LLM ever being consulted.
+5. Flat QuickDraw few-shot references **fight** 3D requests ("a 3D car" gets
+   the flat side-view doodle as its known-good reference).
+6. **All-or-nothing validation selects for timid output**: one bad coordinate
+   → the whole response silently becomes a NOOP (no retry-with-error, no
+   clamping, no part salvage, no `max_tokens` → truncation = same silent drop).
+
+What is genuinely model-bound: novel 3D projection of complex assemblies and
+reliable arithmetic placement exceed llama-3.3-70b single-shot ability
+(consistent with public evidence: it appears on no SVG leaderboard; June-2026
+SVGBench leaders are Claude Opus 4.6 75.6% / GPT-5.2 74.4%; best open drawers
+are GLM-5 70.3% and Kimi K2.5).
+
+### The program — five segments, in order
+
+| # | Segment | Design intent | Done when (incl. latency) |
+|---|---|---|---|
+| **D1** | Routing + validation repair | "3d/isometric" tokens escalate past rules; LLM output is *repaired*, not dropped: clamp out-of-range coords, salvage valid parts, one retry feeding the validation error back, explicit `max_tokens` | "a 3D box" → cuboid (not flat rect); injected-fault tests show partial salvage; fast-path p95 unchanged |
+| **D2** | Prompt overhaul | Teach z-order/occlusion explicitly; fills ON for 3D; one worked example with **overlapping, occluding** parts; "parts attach and overlap — never lay components out side-by-side"; suppress flat QuickDraw refs when utterance says 3D/isometric | Before/after on a fixed 10-prompt intricate/3D set, rendered + eyeballed; no latency regression (same call count) |
+| **D3** | **Deterministic isometric projection** (highest leverage) | New IR primitives `box`/`cylinder`/`wedge` with (x,y,z,w,d,h); the *pure renderer* does the 30° projection, face shading, hidden-face handling, z-sort (generalizing `make_isometric.py::_project`). The LLM only reasons about axis-aligned 3D placement — never projection math. Extends the proven `relations.py` pattern: **model proposes, code disposes** | "a 3D engine with pistons" renders as a coherent isometric assembly; renderer stays pure/deterministic/cached; round-trip ≤ current stage-C budget |
+| **D4** | Adherence eval + tiered models | Extend `eval_llm.py` to score **instruction adherence** (part counts, colors, overlap/coherence, relations), not just JSON validity. Benchmark GLM-5, Kimi K2.5, Cerebras-hosted Qwen3/gpt-oss on it. Add an **escalation tier** (Gemini 3 Flash or Claude Sonnet 4.6) for intricate/3D-classified prompts, streamed so the canvas animates while drawing | Measured adherence table in the ledger; escalation tier behind env config; fast tier still ≤ 2 s p95 |
+| **D5** | Polish loop + template growth (optional) | Async render→VLM-critique→repair pass (~$0.005–0.01/round) after the fast first draw; grow a curated intricate-template bank via frontier batch APIs (Opus/Gemini Pro at 50% batch discount, Recraft V4.1 Vector); verify TU-Berlin license (CC-BY-4.0?) and mine it | Polish round measurably improves the 10-prompt set without touching first-draw latency |
+
+### Model strategy (tiered — latency is the binding constraint)
+At ~1.5k output tokens only Groq (~400–500 tok/s) and Cerebras (~3,000 tok/s)
+fit the 1–2 s live budget; frontier models take 12–30 s. So: **fast tier**
+(live, every utterance) on Groq/Cerebras — candidates GLM-5, Kimi K2.5,
+Qwen3-235B, gpt-oss-120B, benchmarked on D4's adherence eval before any
+switch; **escalation tier** (intricate/3D only, 5–15 s tolerated, streamed)
+on Gemini 3 Flash / Claude Sonnet 4.6; **offline tier** (template-bank
+generation, no latency constraint) on Opus / Gemini Pro batch / Recraft.
+Never swap the default on benchmarks we didn't run ourselves.
+
+### Dataset constraints (carried forward)
+QuickDraw (CC-BY-4.0) remains the only proven ship-safe source. **No
+isometric/3D sketch dataset exists on Hugging Face** — the scalable path is
+programmatic synthesis (D3) + frontier batch generation (D5), not mining.
+TU-Berlin (20k sketches, 250 categories) is the one candidate addition —
+verify its CC-BY-4.0 status first. SketchGraphs/sam-dataset (CAD sketches
+with constraint graphs) are legally murky to ship (Onshape ToU); MMSVG and
+FIGR-8 stay rejected (NC / no-resale).
