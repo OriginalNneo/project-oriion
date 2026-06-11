@@ -63,6 +63,7 @@ Rules:
 - Resolve references like "the circle" or "the second one" against context.candidates and set target_node_id.
 - EXTENDING the current design ("add five thrusters", "give it a chimney", "put a hat on it"): emit op_type "modify" with target_node_id = context.focus_node_id and geometry = the COMPLETE new scene as a group — copy every part from context.focus_geometry unchanged (keep their names and coordinates), then append the new parts. Never send only the new parts: your geometry REPLACES the node's geometry entirely.
 - For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part, then position the parts coherently in the 0..100 box. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
+- context.reference_sketches: known-good geometry for concepts the utterance mentions, mined from real human drawings. When present, ADAPT the reference — reposition, rescale, recolor, combine with other parts — instead of inventing the concept from scratch. References are drawn full-canvas: shrink them when they are only one part of a larger scene.
 - Compose generously and use the RICH primitives — favor polygon/path/text over stacks of rectangles when they capture the shape better. Keep every coordinate inside 0..100 and the result visually coherent and centered.
 
 Example A — "a five-pointed star" (single exact polygon):
@@ -179,8 +180,11 @@ class LLMClassifier:
             )
 
     # ------------------------------------------------------------------ #
-    async def _complete(self, text: str, context: ClassifierContext) -> str:
-        user = json.dumps(
+    @staticmethod
+    def _user_payload(text: str, context: ClassifierContext) -> str:
+        from quorum.pipeline.templates import match
+
+        return json.dumps(
             {
                 "utterance": text,
                 "context": {
@@ -196,9 +200,22 @@ class LLMClassifier:
                         if context.focus_geometry is not None
                         else None
                     ),
+                    # Known-good sketches for concepts the utterance mentions
+                    # (mined from real drawings) — the model adapts, not invents.
+                    "reference_sketches": [
+                        {
+                            "name": name,
+                            "geometry": spec.model_dump(mode="json", exclude_defaults=True),
+                        }
+                        for name, _, spec in match(text, limit=2)
+                    ]
+                    or None,
                 },
             }
         )
+
+    async def _complete(self, text: str, context: ClassifierContext) -> str:
+        user = self._user_payload(text, context)
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user},

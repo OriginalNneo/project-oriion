@@ -404,17 +404,27 @@ MockClassifier = RulesClassifier
 
 
 class CascadeClassifier:
-    """Stage A always; stage C only when A is unsure (plan.md §3.3/§5).
+    """Stage A always; stage B (templates) when A is unsure; stage C only when
+    both are (plan.md §3.3/§5).
 
     The escalation threshold is the latency/accuracy lever from RULES.md §6:
     higher = fewer LLM calls = lower median latency. The LLM's failure mode is
     a zero-confidence NOOP, in which case the fast result stands — a dead LLM
-    degrades quality, never availability.
+    degrades quality, never availability. The template stage is also free to
+    decline (zero-confidence NOOP), in which case the LLM is asked.
     """
 
-    def __init__(self, fast: Classifier, llm: Classifier, *, threshold: float = 0.55) -> None:
+    def __init__(
+        self,
+        fast: Classifier,
+        llm: Classifier,
+        *,
+        template: Classifier | None = None,
+        threshold: float = 0.55,
+    ) -> None:
         self.fast = fast
         self.llm = llm
+        self.template = template
         self.threshold = threshold
 
     async def classify(
@@ -430,6 +440,15 @@ class CascadeClassifier:
         )
         if fast_op.op_type is not OpType.NOOP and fast_op.confidence >= self.threshold:
             return fast_op
+        if self.template is not None:
+            template_op = await self.template.classify(
+                text, speaker_id=speaker_id, utterance_id=utterance_id, context=context
+            )
+            if (
+                template_op.op_type is not OpType.NOOP
+                and template_op.confidence >= self.threshold
+            ):
+                return template_op  # known concept, answered for free
         async with stage_timer("classify_llm", utterance_id=utterance_id):
             llm_op = await self.llm.classify(
                 text, speaker_id=speaker_id, utterance_id=utterance_id, context=context
@@ -447,6 +466,7 @@ def build_classifier() -> Classifier:
     """
     from quorum.config import get_settings
     from quorum.pipeline.llm import LLMClassifier
+    from quorum.pipeline.templates import TemplateClassifier
 
     settings = get_settings()
     rules = RulesClassifier()
@@ -455,5 +475,6 @@ def build_classifier() -> Classifier:
     return CascadeClassifier(
         rules,
         LLMClassifier.from_settings(settings),
+        template=TemplateClassifier(),
         threshold=settings.llm_escalation_threshold,
     )

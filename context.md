@@ -32,6 +32,32 @@ fast path p95 0.111 ms, LLM classify ~1.0/1.8 s (§7).
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **QuickDraw template library (cascade stage B) — DONE & live-verified.**
+  139 templates shipped; "a snowman"/"a bicycle" answer in **~0 ms from the
+  template bank** (no LLM call), and "a snowman wearing a top hat" escalates
+  to Groq which *adapts the injected reference* (the three snowman strokes
+  come back byte-identical + hat parts added — retrieval-augmented few-shot
+  working as designed). ruff/mypy/108 tests green; fast path p95 0.092 ms.
+  Files:
+  - `scripts/mine_templates.py` — mines ~135 curated categories from the
+    public Quick, Draw! simplified dumps (CC-BY-4.0, attribution embedded in
+    the JSON): first recognized drawing within stroke/point budget, rescaled
+    0..255→8..92, strokes downsampled to ≤30 pts (path caps: 64 cmds/600
+    chars), each template validated + rendered before writing
+    `quorum/pipeline/templates/quickdraw.json` (139 templates, 116 KB;
+    "street light"/"watch" are not Quick, Draw! categories — removed).
+  - `pipeline/templates.py` — `_library()`/`match()` (combined regex index,
+    synonyms phone→cell phone, plural-s) + `TemplateClassifier` (stage B):
+    bare "draw a snowman" → instant CREATE conf 0.9 source=template; any
+    richer phrasing declines (NOOP 0.0) so the LLM gets it.
+  - `pipeline/classify.py` — `CascadeClassifier(fast, llm, template=...)`:
+    rules → template → LLM; `build_classifier()` wires stage B when LLM is on.
+  - `pipeline/llm.py` — user payload factored into testable `_user_payload`;
+    now carries `reference_sketches` (≤2 matched templates, exclude_defaults)
+    + prompt rule: ADAPT the reference, shrink when part of a larger scene.
+  - `tests/test_templates.py` — library renders, synonym/plural match, direct
+    hit, rich-utterance decline, cascade skip-LLM + decline-reaches-LLM,
+    payload carries refs.
 - **Live retest segment: 3D shapes, device sketches, color fills — verified
   against real Groq** (user reported "still can't do it"; agent now retests
   live itself via `backend/scripts/probe_llm.py`, which drives utterances
@@ -267,13 +293,8 @@ _(append-only-ish; newest at top)_
      **Add to the script:** "a funnel turned on its side" → "now add five
      thrusters" (tests the new scene-extension path) and "a rocket with a box
      body and fins" (tests the escalation heuristic).
-3. **QuickDraw template library (retrieval-augmented few-shot).** Offline
-   `scripts/mine_templates.py`: pull `google/quickdraw` simplified drawings
-   (CC-BY-4.0), top-recognized drawing per category, rescale 0..255→0..100,
-   emit IR JSON; hand-curate ~50 concepts (snowman, rocket, funnel, tree…).
-   Runtime: fuzzy-match utterance nouns → inject 1–2 templates as few-shot
-   into the Groq prompt; exact single-object match with no modifiers can skip
-   the LLM (0 ms vs ~1–2 s). Doubles as eval fixtures (MMSVGBench for eval).
+3. [x] **QuickDraw template library — DONE** (see §3): 139 templates, stage B
+   in the cascade, ~0 ms direct hits, LLM few-shot injection live-verified.
 4. **Phase 1b — server STT:** client mic capture (Web Audio → 16 kHz PCM over
    WS) → Silero VAD (`VAD`) → faster-whisper (`Transcriber`) → same tail. Wire
    `QUORUM_STT_BACKEND=local`; extend the latency harness with STT/VAD rows.
