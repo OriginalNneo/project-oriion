@@ -92,6 +92,120 @@ async def test_hazy_scene_composition_escalates_too() -> None:
     assert op.confidence < 0.55  # below the default cascade threshold
 
 
+async def test_geometric_relation_word_escalates() -> None:
+    # "line"+"circle" both match the rules shape table, so this used to win as
+    # a side-by-side group at 0.75 — but "tangential" IS the meaning. One
+    # relation word now outweighs any shape match.
+    for text in (
+        "a line tangential to a circle",
+        "draw a line tangent to the circle",
+        "two parallel lines",
+        "a square inscribed in a circle",
+    ):
+        op = await _rules(text)
+        assert op.confidence < 0.55, text
+
+
+async def test_relation_utterance_reaches_llm() -> None:
+    llm = FakeLLM()
+    cascade = CascadeClassifier(RulesClassifier(), llm)
+    op = await cascade.classify(
+        "a line tangential to a circle", speaker_id="a", utterance_id="u1", context=_CTX
+    )
+    assert llm.calls == 1
+    assert op.source_stage == "llm"
+
+
+_TANGENT = """
+{"op_type":"modify","target_shape":"group","target_node_id":"n2","confidence":0.88,
+ "geometry":{"kind":"group","x":50,"y":50,"width":80,"height":70,"stroke":"#1f2937","parts":[
+   {"kind":"circle","name":"circle","x":40,"y":55,"width":44,"height":44,"stroke":"#1f2937"},
+   {"kind":"path","name":"tangent-line","x":55.6,"y":39.4,"width":39.6,"height":39.6,
+    "stroke":"#b91c1c","d":"M 35.8 19.6 L 75.4 59.2"}]}}
+"""
+
+
+def _line_dist(circle: GeometrySpec, line: GeometrySpec) -> tuple[float, float]:
+    cx, cy, r = circle.x, circle.y, circle.width / 2
+    nums = [float(t) for t in (line.d or "").replace("M", " ").replace("L", " ").split()]
+    (x1, y1, x2, y2) = nums
+    dx, dy = x2 - x1, y2 - y1
+    dist = abs(dx * (cy - y1) - dy * (cx - x1)) / (dx**2 + dy**2) ** 0.5
+    return dist, r
+
+
+def test_snap_relations_fixes_off_tangent_line() -> None:
+    """The live failure case: LLM emitted a 'tangent' 7 units off — the
+    snapper must translate it to exact tangency, preserving direction."""
+    from quorum.pipeline.relations import snap_relations
+
+    geom = GeometrySpec(
+        kind=ShapeKind.GROUP,
+        parts=[
+            GeometrySpec(kind=ShapeKind.CIRCLE, name="c", x=50, y=50, width=50, height=50),
+            GeometrySpec(kind=ShapeKind.PATH, name="t", x=50, y=25,
+                         width=50, height=50, d="M 25 0 L 75 50"),
+        ],
+    )
+    snapped = snap_relations("a line tangential to the circle", geom)
+    assert snapped is not None
+    dist, r = _line_dist(snapped.parts[0], snapped.parts[1])
+    assert abs(dist - r) < 0.2, f"distance {dist} vs radius {r}"
+    # direction preserved (still the same 45-degree slope)
+    nums = [float(t) for t in (snapped.parts[1].d or "")
+            .replace("M", " ").replace("L", " ").split()]
+    assert abs((nums[3] - nums[1]) - (nums[2] - nums[0])) < 1e-6
+    # untouched without a relation word
+    same = snap_relations("a circle and a line", geom)
+    assert same is geom
+
+
+def test_snap_relations_shortens_when_tangent_cannot_fit() -> None:
+    """Live failure 2026-06-12: the LLM re-emitted the circle blown up to the
+    full 100x100 box; a 45-degree tangent of the emitted length fits nowhere
+    in the box, so the old code passed the center-chord through unchanged.
+    The snapper must now SHORTEN the line (tangency is the meaning, length is
+    incidental) instead of giving up."""
+    from quorum.pipeline.relations import snap_relations
+
+    geom = GeometrySpec(
+        kind=ShapeKind.GROUP,
+        parts=[
+            GeometrySpec(kind=ShapeKind.CIRCLE, name="c", x=50, y=50,
+                         width=100, height=100),
+            GeometrySpec(kind=ShapeKind.PATH, name="t", x=50, y=50,
+                         width=44, height=44, d="M 28 72 L 72 28"),
+        ],
+    )
+    snapped = snap_relations("now draw a line tangent to it", geom)
+    assert snapped is not None and snapped is not geom
+    dist, r = _line_dist(snapped.parts[0], snapped.parts[1])
+    assert abs(dist - r) < 0.2, f"distance {dist} vs radius {r}"
+    nums = [float(t) for t in (snapped.parts[1].d or "")
+            .replace("M", " ").replace("L", " ").split()]
+    assert all(0.0 <= v <= 100.0 for v in nums), f"out of box: {nums}"
+    # still a visible line (>= 5 units), and still 45 degrees
+    length = ((nums[2] - nums[0]) ** 2 + (nums[3] - nums[1]) ** 2) ** 0.5
+    assert length >= 5.0
+    assert abs((nums[3] - nums[1]) + (nums[2] - nums[0])) < 1e-6
+
+
+def test_prompt_example_f_tangent_is_numerically_tangent() -> None:
+    """The worked tangent example must actually BE tangent (distance == r)."""
+    payload = _LLMPayload.model_validate_json(_TANGENT)
+    op = payload_to_op(payload, speaker_id="a", utterance_id="u1", raw_text="tangent")
+    assert op.geometry is not None
+    circle, line = op.geometry.parts
+    cx, cy, r = circle.x, circle.y, circle.width / 2
+    nums = [float(t) for t in (line.d or "").replace("M", " ").replace("L", " ").split()]
+    (x1, y1, x2, y2) = nums
+    # perpendicular distance from the circle center to the line
+    dx, dy = x2 - x1, y2 - y1
+    dist = abs(dx * (cy - y1) - dy * (cx - x1)) / (dx**2 + dy**2) ** 0.5
+    assert abs(dist - r) < 0.5, f"distance {dist} vs radius {r}"
+    assert SvgRenderer().render(op.geometry).startswith("<svg")
+
+
 # --------------------------------------------------------------------------- #
 # 2) engine: MODIFY accepts replacement geometry (LLM re-emits the scene)     #
 # --------------------------------------------------------------------------- #

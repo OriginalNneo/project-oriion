@@ -115,6 +115,15 @@ _KNOWN_WORDS: frozenset[str] = frozenset(
 # back to this op instead of dropping the utterance.
 _HAZY_CONFIDENCE = 0.5
 
+# Geometric-relation vocabulary ("a line TANGENT to the circle"). One such word
+# is enough to outweigh any shape-word match: the relation IS the meaning, and
+# rules can only place shapes side-by-side — exact relations are LLM work.
+_RELATION_RE = re.compile(
+    r"\b(tangent\w*|tangential|perpendicular|parallel|concentric|inscribed|"
+    r"circumscribed|intersect\w*|bisect\w*|touch\w*|midpoint|diagonal\w*|"
+    r"degrees?|angle[ds]?|symmetri\w+|mirror\w*|align\w*|equidistant)\b"
+)
+
 # Spatial relations for composing a multi-shape SCENE in one node
 # ("a circle with a square on top" is one idea, not two).
 _STACK_RE = re.compile(r"\bon top\b|\babove\b|\bover\b")
@@ -218,9 +227,14 @@ class RulesClassifier:
 
         modifiers = self._find_modifiers(lowered)
         # ≥2 content words the rules can't express ("rocket … thrusters") means
-        # a matched shape word is probably one PART of a richer intent: emit
-        # the match below the cascade threshold so the LLM stage handles it.
-        hazy = len(self._unexplained_words(lowered)) >= 2
+        # a matched shape word is probably one PART of a richer intent; a single
+        # geometric-relation word ("tangent", "perpendicular") means it outright.
+        # Either way: emit the match below the cascade threshold so the LLM
+        # stage handles it (and the rules op stays as the dead-LLM fallback).
+        hazy = (
+            len(self._unexplained_words(lowered)) >= 2
+            or _RELATION_RE.search(lowered) is not None
+        )
 
         # 4) modify a *named existing* node ("make the circle bigger/red").
         # The definite article is the discriminator: "the circle" refers to an
