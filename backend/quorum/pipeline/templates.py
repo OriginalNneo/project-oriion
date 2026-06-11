@@ -30,9 +30,11 @@ from quorum.observability import get_logger
 
 _log = get_logger("pipeline.templates")
 
-_TEMPLATES_FILE = Path(__file__).parent / "templates" / "quickdraw.json"
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-# Spoken-word aliases -> canonical Quick, Draw! category names.
+# Spoken-word aliases -> canonical template names (Quick, Draw! categories or
+# the parametric isometric set). Longest spoken form wins at match time, so
+# "3d cube" resolves before a bare "cube" could.
 _SYNONYMS: dict[str, str] = {
     "phone": "cell phone",
     "smartphone": "cell phone",
@@ -48,25 +50,41 @@ _SYNONYMS: dict[str, str] = {
     "bulb": "light bulb",
     "plane": "airplane",
     "lorry": "truck",
-    "mech pencil": "pencil",
+    # parametric isometric set
+    "3d cube": "cube",
+    "isometric cube": "cube",
+    "3d box": "cuboid",
+    "box in 3d": "cuboid",
+    "rectangular prism": "cuboid",
+    "3d pyramid": "pyramid",
+    "3d sphere": "sphere",
+    "ball": "sphere",
+    "cog": "gear",
+    "cogwheel": "gear",
+    "gear wheel": "gear",
+    "3d stairs": "staircase",
+    "isometric stairs": "staircase",
 }
 
 # Words that may surround a bare create-intent without changing it.
 _FILLER = frozenset(
     "please draw sketch make create a an the me us we i want lets let's "
-    "okay ok now how about maybe just simple basic quick".split()
+    "okay ok now how about maybe just simple basic quick 3d isometric iso "
+    "in view".split()
 )
 
 
 @lru_cache(maxsize=1)
 def _library() -> dict[str, GeometrySpec]:
-    if not _TEMPLATES_FILE.exists():
-        _log.warning("templates_missing", path=str(_TEMPLATES_FILE))
-        return {}
-    raw = json.loads(_TEMPLATES_FILE.read_text())
-    return {
-        name: GeometrySpec.model_validate(spec) for name, spec in raw["templates"].items()
-    }
+    """All templates, merged across every JSON bank in the templates dir."""
+    lib: dict[str, GeometrySpec] = {}
+    for file in sorted(_TEMPLATES_DIR.glob("*.json")):
+        raw = json.loads(file.read_text())
+        for name, spec in raw["templates"].items():
+            lib[name] = GeometrySpec.model_validate(spec)
+    if not lib:
+        _log.warning("templates_missing", path=str(_TEMPLATES_DIR))
+    return lib
 
 
 @lru_cache(maxsize=1)
@@ -129,7 +147,7 @@ class TemplateClassifier:
             return decline
         name, matched, spec = hits[0]
         residue = lowered.replace(matched, " ", 1)
-        leftover = [w for w in re.findall(r"[a-z']+", residue) if w not in _FILLER]
+        leftover = [w for w in re.findall(r"[a-z0-9']+", residue) if w not in _FILLER]
         if leftover:
             return decline  # extra meaning -> LLM territory (with few-shot refs)
         _log.debug("template_hit", name=name, utterance_id=utterance_id)

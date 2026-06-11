@@ -5,20 +5,24 @@ strokes RDP-simplified into a 0..255 box) from
 ``storage.googleapis.com/quickdraw_dataset`` — CC-BY-4.0 (attribution:
 "Quick, Draw! dataset, Google" — see the templates JSON header).
 
-For each curated category this picks the first *recognized* drawing whose
-size fits our IR caps comfortably, rescales 0..255 → 8..92 (aspect kept),
-downsamples each stroke to ≤30 points, and emits one GeometrySpec dict —
-a single ``path`` for one-stroke drawings, else a ``group`` of paths.
-Every template is validated AND rendered before it is written.
+Mines **every** official category (list fetched from the dataset repo; the
+curated list below is the offline fallback). For each category it scans the
+first few hundred drawings and keeps the most *elaborate* recognized one that
+still fits our IR caps — scored by stroke/point richness — then rescales
+0..255 → 8..92 (aspect kept), downsamples each stroke to ≤30 points, and emits
+one GeometrySpec dict: a single ``path`` for one-stroke drawings, else a
+``group`` of paths. Every template is validated AND rendered before writing.
 
 Run (network; ~1 request per category):
 
-    uv run python scripts/mine_templates.py
+    uv run python scripts/mine_templates.py            # all official categories
+    uv run python scripts/mine_templates.py --curated  # fallback curated list
 """
 
 from __future__ import annotations
 
 import json
+import statistics
 import sys
 from pathlib import Path
 from typing import Any
@@ -59,9 +63,13 @@ CATEGORIES = [
     "wristwatch", "zigzag",
 ]
 
-_MAX_STROKES = 12          # keep templates simple (also: group parts cap 60)
+_MAX_STROKES = 16          # group parts cap is 60; 16 keeps sketches readable
 _MAX_STROKE_POINTS = 30    # path cap: 64 commands / 200 numbers / 600 chars
-_SCAN_LINES = 400          # how deep to look for a good drawing per category
+_SCAN_LINES = 1000         # how deep to look for a good drawing per category
+_CATEGORIES_URL = (
+    "https://raw.githubusercontent.com/googlecreativelab/quickdraw-dataset"
+    "/master/categories.txt"
+)
 
 
 def _downsample(xs: list[int], ys: list[int], cap: int) -> tuple[list[int], list[int]]:
@@ -72,8 +80,10 @@ def _downsample(xs: list[int], ys: list[int], cap: int) -> tuple[list[int], list
     return [xs[i] for i in idx], [ys[i] for i in idx]
 
 
-def _pick(lines: list[str]) -> list[list[list[int]]] | None:
-    """First recognized drawing with a comfortable stroke/point budget."""
+def _candidates(
+    lines: list[str], *, min_strokes: int
+) -> list[tuple[int, list[list[list[int]]]]]:
+    out: list[tuple[int, list[list[list[int]]]]] = []
     for line in lines:
         try:
             row = json.loads(line)
@@ -82,10 +92,48 @@ def _pick(lines: list[str]) -> list[list[list[int]]] | None:
         if not row.get("recognized"):
             continue
         drawing: list[list[list[int]]] = row.get("drawing", [])
+        strokes = len(drawing)
         total = sum(len(s[0]) for s in drawing)
-        if 1 <= len(drawing) <= _MAX_STROKES and 8 <= total <= 200:
-            return drawing
-    return None
+        if not (min_strokes <= strokes <= _MAX_STROKES and 12 <= total <= 320):
+            continue
+        if total / strokes > 32:  # one long dense stroke = a scribble, not a sketch
+            continue
+        out.append((total, drawing))
+    return out
+
+
+def _pick(lines: list[str]) -> list[list[list[int]]] | None:
+    """A *canonically structured* recognized drawing, not the densest one.
+
+    Max-points selection favors scribblers and pure medians favor sloppy
+    typicals. Instead: (1) find the MODAL stroke count across the candidate
+    pool — the crowd's canonical decomposition of the object (snowman = 3
+    strokes, house = 5...) — then (2) within that modal group take the drawing
+    closest to 1.2x the group's median point count: slightly richer than
+    typical, same recognizable structure. Single-stroke is the fallback for
+    inherently-one-line categories (zigzag, circle, moon...).
+    """
+    pool = _candidates(lines, min_strokes=2) or _candidates(lines, min_strokes=1)
+    if not pool:
+        return None
+    counts = statistics.multimode(len(d) for _, d in pool)
+    modal = max(counts)  # ties -> the richer decomposition
+    group = [c for c in pool if len(c[1]) == modal]
+    target = 1.2 * statistics.median(t for t, _ in group)
+    return min(group, key=lambda c: abs(c[0] - target))[1]
+
+
+def _all_categories(client: httpx.Client) -> list[str]:
+    """The official category list; falls back to the curated one on failure."""
+    try:
+        resp = client.get(_CATEGORIES_URL)
+        resp.raise_for_status()
+        cats = [c.strip() for c in resp.text.splitlines() if c.strip()]
+        if len(cats) > 200:
+            return cats
+    except Exception as exc:
+        print(f"category list fetch failed ({exc}); using curated fallback")
+    return CATEGORIES
 
 
 def _to_spec(drawing: list[list[list[int]]]) -> dict[str, Any]:
@@ -133,7 +181,8 @@ def main() -> int:
     out: dict[str, Any] = {}
     failed: list[str] = []
     with httpx.Client(timeout=30.0) as client:
-        for cat in CATEGORIES:
+        cats = CATEGORIES if "--curated" in sys.argv[1:] else _all_categories(client)
+        for cat in cats:
             url = f"{_BASE}/{cat}.ndjson"
             try:
                 lines: list[str] = []

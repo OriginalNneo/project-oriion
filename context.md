@@ -20,6 +20,29 @@ All checks green (ruff, mypy strict, **98 backend tests**, tsc, vite build);
 fast path p95 0.111 ms, LLM classify ~1.0/1.8 s (§7).
 
 ## 2. Current focus
+**Active plan (2026-06-11, user effort=high): richer drawing power + whole-program assurance.**
+1. [x] **Elaborate templates — DONE.** Full official list mined: **345
+   templates** (was 139). Selection took three iterations (see §3): max-points
+   picked scribbles; pure median picked sloppy-typicals; final = **modal
+   stroke count** (the crowd's canonical decomposition: snowman = 3 strokes)
+   then nearest 1.2x median points within that group, scribble filter
+   (points/stroke ≤ 32), 1000-drawing scan. Visually sampled: snowman/house
+   clean and canonical; helicopter/bicycle remain crowd-quality (acceptable
+   as LLM references; direct hits shine on the popular concepts).
+2. [x] **Isometric library — DONE.** `scripts/make_isometric.py` (true 30°
+   projection + per-face shading) → 8 exact templates: cube, cuboid, pyramid,
+   cylinder, cone, sphere, gear, staircase. ALL visually verified via
+   rendered thumbnails (cone needed an arc sweep-flag fix — right-to-left
+   arcs invert the bulge). "3D cube"/"ball"/"cog" synonyms; "3d"/"isometric"
+   count as filler so "an isometric cube" is a 0 ms direct hit.
+3. [ ] **Whole-program verification:** backend checks + REAL `uvicorn` boot +
+   scripted WS client driving join→template→isometric→LLM-scene→extension;
+   frontend tsc + build.
+4. [ ] **Model improvement (measured):** `scripts/eval_llm.py` benchmarks
+   candidate Groq models (validity %, geometry richness, latency) on a fixed
+   utterance set; keep/switch on evidence. Fine-tuning stays REJECTED
+   (decisions log: blows the 1–2 s budget); retrieval + prompt is our lever.
+
 - [x] Phase 0: prove the loop — participant client → WS → Design State Engine →
       SVG render → diff broadcast → both Participant and Display views update.
 - [x] Phase 1a: the MVP — voice input (Web Speech API), classifier vocabulary
@@ -32,6 +55,26 @@ fast path p95 0.111 ms, LLM classify ~1.0/1.8 s (§7).
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Template bank v2: 345 mined + 8 exact isometric (effort=high plan items
+  1–2).** 110 tests, latency p95 0.081 ms, frontend tsc+build green.
+  - Miner selection lesson (pinned so it isn't relitigated): *max-points
+    selection mines scribbles* — QuickDraw's densest drawings are scrawls.
+    Median alone picks sloppy-typicals. What works: modal stroke count
+    (canonical structure) → nearest 1.2x median points inside that group +
+    points-per-stroke ≤ 32 scribble filter, scanning 1000 drawings/category.
+  - Isometric bank is *computed*, not drawn: true 30° projection, shaded
+    faces (light top / mid front / dark side), all 8 visually verified via
+    PNG thumbnails (`qlmanage`). Gotcha: SVG arc sweep flags invert when the
+    path runs right-to-left — the cone's base bulged inward until flipped.
+  - `_library()` merges every `templates/*.json` bank; isometric names win
+    duplicates (sorted file order: isometric.json < quickdraw.json — wait,
+    alphabetical puts isometric first then quickdraw OVERWRITES dupes; no
+    name collisions exist today, guard if adding overlapping banks).
+  - New scripts: `make_isometric.py`, `e2e_check.py` (real uvicorn + real
+    websocket whole-loop check), `eval_llm.py` (model benchmark; Groq
+    free-tier TPM is per-model and our prompt is ~3.5k tokens → pace 12 s,
+    retry on 429 with 20 s waits; `kimi-k2-instruct` is GONE from Groq —
+    verify candidates against GET /openai/v1/models).
 - **QuickDraw template library (cascade stage B) — DONE & live-verified.**
   139 templates shipped; "a snowman"/"a bicycle" answer in **~0 ms from the
   template bank** (no LLM call), and "a snowman wearing a top hat" escalates
