@@ -35,7 +35,7 @@ You turn ONE spoken utterance from a live collaborative design session into ONE 
 Schema:
 {
   "op_type": "create|branch|modify|focus|prune|connect|noop",
-  "target_shape": "rectangle|circle|triangle|ellipse|line|group|node|edge|null",
+  "target_shape": "rectangle|circle|triangle|ellipse|line|polygon|path|text|group|node|edge|null",
   "target_node_id": "<id from context.candidates or null>",
   "relation_to_node": "<second node id, only for connect, else null>",
   "modifiers": ["fillet", "radius:8", "bigger", "smaller", "color:#dc2626"],
@@ -44,16 +44,29 @@ Schema:
   "geometry": <GeometrySpec or null>
 }
 
-GeometrySpec: {"kind": "...", "x": 0..100, "y": 0..100, "width": 0..100, "height": 0..100, "corner_radius": 0..50, "stroke": "#rrggbb", "parts": [...]}
-Coordinates are centers in an abstract 0..100 box. For a scene made of SEVERAL primitives, use kind "group" and put every primitive in "parts" with absolute coordinates in the same box; leave the group's own x/y/width/height at defaults.
+GeometrySpec — pick the SIMPLEST kind that expresses the intent:
+  shared fields: {"kind": "...", "x": 0..100, "y": 0..100, "width": 0..100, "height": 0..100, "corner_radius": 0..50, "stroke": "#rrggbb", "name": "<optional label for this part, for later targeted edits>", "stroke_width": 0..10, "fill_style": "hachure|solid|none", "parts": [...]}
+  Coordinates are CENTERS in an abstract 0..100 box (x→right, y→DOWN: y=0 top, y=100 bottom).
+  - "rectangle"/"circle"/"triangle"/"ellipse": use x,y (center) + width,height.
+  - "line": a stroke from (x,y) to (x+width, y+height-50)... prefer "path" for anything non-trivial.
+  - "polygon": EXACT straight-edged shapes. Set "points": [[x,y],[x,y],...] 3-32 vertices in the 0..100 box, in order around the outline. Use for star, hexagon, pentagon, arrow, diamond, chevron, isometric/cube faces, gears-as-outline, any custom angular silhouette.
+  - "path": smooth or complex outlines. Set "d": a constrained SVG path. ABSOLUTE UPPERCASE COMMANDS ONLY (M L H V C Q A Z) — never lowercase/relative. All numbers in 0..100. Use for curves, blobs, leaves, hearts, speech bubbles, road/river curves.
+  - "text": a label. Set "label": "the words" and "font_size": 2..12 (default 4 ≈ 15px). x,y is the text center.
+  - "group": a SCENE of several primitives. Put every primitive in "parts" (each with absolute coords in the SAME 0..100 box) and leave the group's own x/y/width/height at defaults. Parts may be any kind EXCEPT group (no nesting). Give meaningful parts a "name".
 
 Rules:
 - "create" for a new idea; "branch" when it's a variant of the current focus; "modify" to change an existing node (set target_node_id from context); "focus" for preferences (preference_signal: "let's go with"≈1, "maybe"≈0.3, rejection negative); "prune" to remove; "connect" to link two existing nodes; "noop" if it is not a design intent.
 - Resolve references like "the circle" or "the second one" against context.candidates and set target_node_id.
-- Compose generously: "a snowman" => group of three stacked circles (e.g. big circle y≈75 d≈34, middle y≈50 d≈26, head y≈30 d≈18). "a house" => group of a rectangle (y≈62, 44x30) with a triangle roof (y≈36, 48x22). Keep parts inside 0..100 and visually coherent.
+- Compose generously and use the RICH primitives — favor polygon/path/text over stacks of rectangles when they capture the shape better. Keep every coordinate inside 0..100 and the result visually coherent and centered.
 
-Example — utterance: "a snowman with a black hat"
-{"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.85,"geometry":{"kind":"group","x":50,"y":50,"width":40,"height":30,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"circle","x":50,"y":76,"width":32,"height":32,"corner_radius":0,"stroke":"#1f2937","parts":[]},{"kind":"circle","x":50,"y":52,"width":24,"height":24,"corner_radius":0,"stroke":"#1f2937","parts":[]},{"kind":"circle","x":50,"y":33,"width":16,"height":16,"corner_radius":0,"stroke":"#1f2937","parts":[]},{"kind":"rectangle","x":50,"y":22,"width":14,"height":8,"corner_radius":0,"stroke":"#111111","parts":[]}]}}
+Example A — "a five-pointed star" (single exact polygon):
+{"op_type":"create","target_shape":"polygon","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"geometry":{"kind":"polygon","x":50,"y":50,"width":50,"height":50,"corner_radius":0,"stroke":"#1f2937","points":[[50,12],[61,38],[89,38],[66,56],[75,84],[50,67],[25,84],[34,56],[11,38],[39,38]],"parts":[]}}
+
+Example B — "a house with a door and two windows" (group mixing rectangle, polygon roof, text):
+{"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.85,"geometry":{"kind":"group","x":50,"y":50,"width":60,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"rectangle","name":"wall","x":50,"y":64,"width":48,"height":40,"corner_radius":0,"stroke":"#1f2937","parts":[]},{"kind":"polygon","name":"roof","x":50,"y":36,"width":56,"height":24,"corner_radius":0,"stroke":"#b91c1c","points":[[24,44],[50,22],[76,44]],"parts":[]},{"kind":"rectangle","name":"door","x":50,"y":74,"width":10,"height":20,"corner_radius":0,"stroke":"#92400e","parts":[]},{"kind":"rectangle","name":"window-left","x":36,"y":58,"width":9,"height":9,"corner_radius":0,"stroke":"#2563eb","parts":[]},{"kind":"rectangle","name":"window-right","x":64,"y":58,"width":9,"height":9,"corner_radius":0,"stroke":"#2563eb","parts":[]}]}}
+
+Example C — "a heart" (smooth path, absolute uppercase commands):
+{"op_type":"create","target_shape":"path","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.88,"geometry":{"kind":"path","x":50,"y":50,"width":60,"height":54,"corner_radius":0,"stroke":"#dc2626","d":"M50 78 C20 56 22 30 40 30 C48 30 50 38 50 42 C50 38 52 30 60 30 C78 30 80 56 50 78 Z","parts":[]}}
 """
 
 
