@@ -32,6 +32,26 @@ def test_library_loads_and_every_template_renders() -> None:
         assert svg.startswith("<svg"), name
 
 
+def test_isometric_bank_present_and_shaded() -> None:
+    lib = _library()
+    for name in ("cube", "cuboid", "pyramid", "cylinder", "cone", "sphere",
+                 "gear", "staircase"):
+        assert name in lib, name
+    cube = lib["cube"]
+    names = {p.name for p in cube.parts}
+    assert {"face-top", "face-front", "face-right"} <= names
+    assert all(p.fill is not None for p in cube.parts)  # shading sells the 3D
+
+
+async def test_3d_phrasing_is_a_direct_hit() -> None:
+    op = await TemplateClassifier().classify(
+        "a 3D cube", speaker_id="a", utterance_id="u1", context=_CTX
+    )
+    assert op.op_type is OpType.CREATE
+    assert op.source_stage == "template"
+    assert op.geometry is not None and len(op.geometry.parts) == 3
+
+
 def test_match_finds_named_concept_and_synonym() -> None:
     assert [m[0] for m in match("a snowman in the corner")] == ["snowman"]
     assert [m[0] for m in match("a smartphone")] == ["cell phone"]  # synonym
