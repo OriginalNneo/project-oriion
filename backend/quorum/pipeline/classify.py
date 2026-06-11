@@ -124,6 +124,17 @@ _RELATION_RE = re.compile(
     r"degrees?|angle[ds]?|symmetri\w+|mirror\w*|align\w*|equidistant)\b"
 )
 
+# 3-D intent tokens: a shape matched by the flat rules vocabulary while the
+# utterance also signals 3-D perspective must be treated as hazy — the rules
+# stage cannot express isometric geometry, so the cascade must escalate to the
+# template bank (which has exact isometric solids) or the LLM.  The pattern
+# covers the common spoken forms: "3d", "3-d", "isometric", "three dimensional".
+# NOTE: "3d" is two characters so the existing len > 2 filter in
+# _unexplained_words() misses it; a dedicated pattern is more robust.
+_3D_INTENT_RE = re.compile(
+    r"\b(3[-\s]?d|isometric|iso|three[\s-]dimensional)\b"
+)
+
 # Spatial relations for composing a multi-shape SCENE in one node
 # ("a circle with a square on top" is one idea, not two).
 _STACK_RE = re.compile(r"\bon top\b|\babove\b|\bover\b")
@@ -234,6 +245,7 @@ class RulesClassifier:
         hazy = (
             len(self._unexplained_words(lowered)) >= 2
             or _RELATION_RE.search(lowered) is not None
+            or _3D_INTENT_RE.search(lowered) is not None
         )
 
         # 4) modify a *named existing* node ("make the circle bigger/red").

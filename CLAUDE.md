@@ -11,7 +11,7 @@
 1. `context.md` — what's the current state and the short queue?
 2. `plan.md` — only the sections relevant to the current segment.
 3. `RULES.md` — the non-negotiables.
-Then (if memory MCP is enabled) load relevant memories — see §5.
+Then recall relevant auto-memories (loaded at session start) — see §5.
 
 ## 1. Role & prime directives
 You are a senior systems engineer who ships. In priority order:
@@ -46,6 +46,9 @@ the main thread stays lean. Good candidates:
   window default") that returns a recommendation, not a transcript.
 
 Rules for subagents:
+- **Run subagents on Sonnet** (`model: sonnet`) — user instruction 2026-06-12.
+  The main thread stays on the session model; subagents get the cheaper/faster
+  tier. Revisit only if a subagent demonstrably needs more.
 - Give each a **single, well-scoped objective** and the **interface contract**
   it must satisfy — not the whole plan.
 - Require each to return a **compact summary** (what it did, the interface, the
@@ -60,36 +63,23 @@ Rules for subagents:
 - When a segment is done, the *outcome* (interface + latency + decisions) lives
   in `context.md`; the implementation detail can leave your head.
 
-## 5. Persistent memory — Memory MCP (optional but recommended)
-Use the official knowledge-graph memory server to remember decisions, gotchas,
-and benchmarks **across sessions**, so each new session doesn't relearn them.
+## 5. Persistent memory — Claude Code auto-memory (in use)
+Cross-session memory lives in Claude Code's **file-based auto-memory**
+(`~/.claude/projects/<project>/memory/`, indexed by its `MEMORY.md`) — one
+fact per file, recalled automatically at session start. The Memory-MCP
+knowledge-graph server described in earlier revisions was never adopted;
+don't set it up.
 
-Install / configure (`@modelcontextprotocol/server-memory`):
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
-      "env": { "MEMORY_FILE_PATH": "./.quorum-memory.jsonl" }
-    }
-  }
-}
-```
-Tools it exposes: `create_entities`, `create_relations`, `add_observations`,
-`read_graph`, `search_nodes`, `open_nodes`.
-
-What to store as entities/observations:
+What to store there (as the agent):
 - **Decisions** (mirror the `context.md` decisions log) and *why*.
-- **Gotchas** discovered while building (e.g. "Silero VAD window <200 ms cuts
-  off slow speakers").
-- **Measured latencies** per stage (so we track regressions across sessions).
-- **Interface contracts** for each pipeline stage.
-Relations to capture: which stage feeds which, which decision supersedes which.
+- **Gotchas** discovered while building (e.g. the pytest zombie-process hang).
+- **Resume points** — where work stopped and what's next, so a fresh session
+  starts in seconds.
+- **Measured benchmarks** worth tracking across sessions.
 
-> Note: `context.md` is the human-readable source of truth; the memory graph is
-> the agent's fast recall layer. Keep them consistent — when you log a decision
-> in one, log it in the other.
+> Note: `context.md` is the human-readable source of truth; auto-memory is
+> the agent's fast recall layer. Keep them consistent — when you log a
+> decision in one, log it in the other.
 
 ## 6. Coding standards (brief)
 - Python: type hints everywhere; `async def` for any I/O; never block the event
