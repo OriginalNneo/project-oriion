@@ -20,6 +20,13 @@
 >   diagnosis traced most of it to our own prompt/routing/validation (not the
 >   model), so the fix is a five-segment program, not a model swap. §11 is the
 >   design intent; the live segment status lives in `context.md` §2/§4.
+> - 2026-06-12 — added §12 (Compositional iteration & the mind-map canvas).
+>   Reason: live user feedback — follow-ups must restyle the SAME object
+>   ("make the cube red" redrew a flat 2D cube instead of recoloring the
+>   isometric cuboid), every iteration should extend outward as a new node in
+>   a mind-map view (history visible), and nameable geometric shapes
+>   (rhombus, parallelogram) must draw instantly instead of being skipped.
+>   All three diagnosed as codebase gaps, not model gaps.
 
 ---
 
@@ -433,3 +440,81 @@ TU-Berlin (20k sketches, 250 categories) is the one candidate addition —
 verify its CC-BY-4.0 status first. SketchGraphs/sam-dataset (CAD sketches
 with constraint graphs) are legally murky to ship (Onshape ToU); MMSVG and
 FIGR-8 stay rejected (NC / no-resale).
+
+---
+
+## 12. Compositional iteration & the mind-map canvas (2026-06-12)
+
+### The user intent (live feedback, 2026-06-12)
+1. **Iterations compose.** "Draw a cat" → "make the cat orange" must recolor
+   THE cat (preserving its drawn shape); "make the cube red" on an isometric
+   cuboid must produce the same cuboid with red-shaded faces — never a fresh
+   flat 2D square. Later: "shade it into a tabby" (LLM restyle of the same
+   geometry).
+2. **The canvas is a mind map.** The original idea sits at the center; every
+   iteration extends OUTWARD as a new linked node. History stays visible —
+   "red phone" is a second-generation node hanging off "phone", not an
+   in-place overwrite.
+3. **Nameable geometric shapes always draw.** "A rhombus", "a parallelogram",
+   "a trapezoid" must render instantly (they are math, not taste) — never be
+   skipped because they're absent from the rules vocab and the template bank.
+4. Slightly higher quality output, still the lo-fi sketch aesthetic.
+
+### Code-verified diagnosis
+- **F1 — "red cube" redraws flat.** `_SHAPE_WORDS` has no "cube"; named-node
+  resolution (`_resolve_named`) matches on ShapeKind only, so "the cube"
+  cannot resolve to the focused cuboid node. The utterance goes hazy → LLM →
+  the model redraws instead of restyling (create-vs-modify slip). Worse, even
+  a clean MODIFY can't recolor: `apply_modifiers` maps `color:<hex>` to
+  `stroke` only — the cuboid's three shaded face FILLS never re-tint.
+- **F2 — no iteration history.** `engine._modify` mutates the node in place;
+  there is structurally nothing for a mind map to show.
+- **F3 — rhombus skipped.** Not in rules vocab, not a QuickDraw category; a
+  failed/dead LLM falls back to a silent NOOP.
+
+### Design (the running pattern: model proposes, code disposes)
+- **R1 — Iteration-as-branch (engine).** A MODIFY that effects a real change
+  creates a *child* node (parent = target) carrying the new geometry; focus
+  moves to the child so follow-ups chain outward. The parent stays intact.
+  No-change MODIFYs don't spawn nodes. Ancestors of the focus are exempt
+  from cap-pruning (the mind-map trunk must stay visible). Event sourcing
+  is unchanged — replay folds node snapshots + FOCUS_CHANGED as today.
+- **R2 — Deterministic recolor (domain).** `color:<hex>` re-tints every part:
+  a part with a fill takes the target hue/saturation at the part's ORIGINAL
+  lightness (HSL), so the cuboid's light/mid/dark grays become light/mid/dark
+  reds — shading survives. Strokes likewise; stroke-only sketches (QuickDraw
+  cats) take the color directly. Pure function in the domain; no LLM call.
+- **R3 — Labels + label resolution (classifier).** `DesignOp` gains `label`;
+  template hits stamp the canonical concept name ("cuboid", "cat"), rules
+  stamp the shape word, the LLM stage stamps its matched concept. Nodes
+  inherit labels through iterations. `_resolve_named` learns to match "the
+  <word>" against candidate labels (exact / plural / prefix), and
+  label-resolved words count as EXPLAINED — so "I want the cube to be red"
+  becomes a clean fast-path MODIFY (0 ms) instead of hazy LLM work.
+- **R4 — Named-geometry tier (rules).** Exact generators (pure functions →
+  polygon/path specs) for: rhombus/diamond, parallelogram, trapezoid,
+  pentagon, hexagon, octagon, star, arrow, cross, semicircle, kite, heart,
+  crescent. CREATE conf 0.85, composable into scenes (branch 5), words added
+  to the known vocabulary. Zero latency, zero LLM dependency — F3 dies here.
+- **R5 — Restyle prompt rule (LLM, additive + eyeball-gated).** Appearance-
+  only changes re-emit the SAME geometry with only colors/fills changed
+  (coords verbatim); richer restyles ("tabby stripes") stay LLM work anchored
+  on `focus_geometry`. Color-only cases never reach the LLM at all (R3).
+- **R6 — Mind-map canvas (frontend).** Radial layout: roots at the center,
+  depth = ring distance, children fan out within the parent's angular sector;
+  curved derivation edges; node label chips; animated position transitions.
+  Same component for Participant and Display (RULES.md §4).
+
+### Capability verdict (API vs codebase)
+All of F1–F3 are **codebase** gaps — current Groq models suffice because
+recolor/containment/tangency/projection are deterministic code. The one
+place a better API genuinely helps remains §11 D4's escalation tier
+(raw sketch quality for arbitrary concepts); slot a Gemini-Flash/Sonnet key
+in there when available — nothing in §12 blocks on it.
+
+### Acceptance (live, end to end)
+"draw a cuboid" → isometric template hit; "make the cube red" → NEW child
+node, same cuboid geometry, three red-shaded faces, focus on child, parent
+visible; "draw a cat" → template cat; "I want the cat to be orange" → child
+cat, orange strokes; "a rhombus" → exact polygon, 0 ms; mind map shows the
+chains radiating from the originals; all checks + latency budgets green.
