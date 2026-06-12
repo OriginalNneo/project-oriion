@@ -5,7 +5,7 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration AND §13 part-level editing + in-chain 3D — DONE, e2e 16/16 ALL PASS, live-probed.** Checks green: ruff, mypy, **354 tests**, tsc, vite build. Next: human browser confirm, then D3 (plan.md §11).
+> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, AND §14 voice undo + viewport follow — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **393 tests**, tsc, vite build. Next: user's mind-map design reference (incoming) → canvas redesign; human browser confirm; then D3 (plan.md §11).
 
 ---
 
@@ -37,8 +37,18 @@ same day. **Awaiting the human browser pass** — the full confirm script is
 **User browser verdict (2026-06-12 evening): "right now, it's really
 nice."** New feedback captured as §4 item -1 (voice undo / go-back,
 mind-map viewport UX — iterations land too far away, and a user-provided
-design reference to collect BEFORE any canvas redesign). That is the next
-session's starting point.
+design reference to collect BEFORE any canvas redesign).
+
+**§14 program — DONE (2026-06-12, this session), pending the human
+browser pass.** The three pinned questions were ASKED AND ANSWERED by the
+user: (1) the mind-map design reference is INCOMING — user will share it
+in their next message; the canvas redesign stays GATED on it; (2) "zoom
+back out" = **go back / undo**, not a literal view zoom; (3) on go-back
+the abandoned child **stays visible** (no prune, no fade). Design in
+plan.md §14. U1 UNDO op ✅ · U2 undo grammar ✅ · U3 viewport follow ✅ ·
+U4 integration (e2e ALL PASS) ✅. 393 tests, all checks green, fast path
+p95 0.128 ms. ⚠️ Groq: 70b AND scout both quota-dead today; every §14
+path is deterministic and ran without the LLM.
 
 **Previous program (2026-06-11): Drawing Quality D1–D5 — D1/D2 done, D3–D5
 resume after the §12 browser confirm. Steps:**
@@ -109,6 +119,48 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **§14 U1+U2+U4 — voice undo/go-back — DONE, e2e ALL PASS (2026-06-12;
+  U1/U2 by a Sonnet subagent, integrated + gated on the main thread).**
+  393 tests (was 354; +39 in test_undo.py), ruff+mypy clean, fast path p95
+  **0.128 ms** (improved from 0.178 — undo's branch-0 early return is free).
+  - **U1 engine:** `OpType.UNDO` → `_undo()` resolves focus →
+    `parent_ids[0]`, moves focus via `_set_focus` (FOCUS_CHANGED enters the
+    log; replay re-derives statuses from final focus — verified by test),
+    abandoned child stays ACTIVE (user-confirmed), root focus = no-op (no
+    event), both ends of the move upserted.
+  - **U2 classifier:** branch 0 (before ALL content branches, EXEMPT from
+    hazy caps — the phrase IS the meaning, never LLM work, quota-immune):
+    undo/go back/revert/scratch that/never mind/zoom (back) out/previous
+    one|version|situation|step|state, conf 0.9. GUARD: "go back to the
+    <resolvable label/shape>" falls through to FOCUS resolution. "go
+    backwards"/"the back of the house" don't fire (word-boundary regex).
+    Watch live: bare "the previous version had a window" WOULD fire UNDO —
+    revisit if it bites.
+  - **U4 integration:** `e2e_check.py` §14 chain ALL PASS against a real
+    server: hexagon chain → "never mind, go back" (focus→pink, no new
+    nodes, prism stays visible) → "go back" (focus→root) → "make it blue"
+    → blue SIBLING child of the hexagon. §12/§13 chains unregressed.
+  - **Harness fix found by the gate:** a LIVE-but-quota-dead LLM (Groq
+    429s) yields a NOOP fallback → NO diff broadcast → the old script hung
+    at the rocket step and never reached the LLM-free steps. e2e_check.py
+    now catches the 15 s timeout there and SKIPs loudly ("quota-dead?");
+    assertions unchanged when a diff does arrive. Also confirmed: the
+    template stage only exists when the LLM backend is on, so a mock-LLM
+    run can NOT exercise the template steps — gate with the live backend.
+  - **⚠️ Groq quota (2026-06-12): BOTH llama-3.3-70b AND llama-4-scout are
+    now 429-dead for the day.** All §14 + §12/§13 deterministic paths run
+    fine without the LLM (by design). The user has offered to supply more
+    API keys — D4's tiered-models work should pick that up.
+- **§14 U3 — viewport follow (frontend) — built (2026-06-12, main thread;
+  tsc + vite build clean).** `IdeaTree.tsx`: the `.idea-scroll` container
+  (already `overflow:auto`) gets a ref; a `useEffect` keyed on the focused
+  card's LAYOUT position smooth-scrolls it to the viewport center on every
+  focus change or reflow. Deliberately scrolls to the layout coords, not the
+  rendered box — cards animate left/top over 0.45 s, so `scrollIntoView`
+  would chase a mid-transition position. NO layout/redesign change (gated
+  on the user's incoming design reference). Hook sits before the
+  empty-state early return (hooks-order rule). Browser-confirm with the
+  §14 acceptance script.
 - **§13 INTEGRATION — ALL SEGMENTS DONE, e2e ALL PASS, live mouse + hexagon
   chains verified, eyeball-gated (2026-06-12).** 354 tests, ruff+mypy clean,
   fast path p95 0.178 ms (explained in §7). Two real bugs caught at the
@@ -726,38 +778,32 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
--1. **NEW user feedback (2026-06-12 evening, browser session) — input for
-   the NEXT program (likely plan.md §14). User's verdict on §12+§13: "right
-   now, it's really nice." Three asks:**
-   - **Voice undo / go-back:** "I don't really like... never mind, go back
-     to the previous situation" must revert to the previous node — focus
-     back to the parent iteration (and possibly fade/prune the abandoned
-     child). The event log + iteration-as-branch already make this cheap
-     (focus-move to parent; `from_events(events[:-k])` exists for hard
-     undo). "Zoom back out" was also said — may mean view-level zoom out,
-     clarify with the user.
-   - **Mind-map UX — iterations land too far away:** each new iteration is
-     drawn at the next ring (~270 px out), so the active sketch drifts off
-     screen and is hard to see. Candidates: auto-pan/zoom-to-follow-focus,
-     zoom-to-fit, tighter ring spacing for unforked chains. (R6's "deep
-     chains scroll horizontally" watch-item, now confirmed live by the
-     user.)
-   - **⚠️ The user has a mind-map DESIGN REFERENCE they wanted to show**
-     ("let me show you what I was thinking of when we view it in a mind
-     map") — the session ended before they could. **ASK FOR IT FIRST**
-     before redesigning the canvas; do not invent a layout the user
-     already has a picture of.
-0. **Browser live-confirm of §12 + §13 (the one thing the agent can't
-   observe):** Participant tab, speak:
+-1. **Mind-map canvas redesign — GATED on the user's design reference
+   (user confirmed 2026-06-12 they'll share it in their next message).**
+   Do NOT invent a layout — design the next program (§15) around the
+   reference when it lands. The 2026-06-12-evening feedback that drove
+   §14 is otherwise RESOLVED: voice undo/go-back ✅ ("zoom back out" =
+   user-confirmed undo synonym), viewport follow ✅ (the focused card now
+   auto-centers; ring-spacing/zoom-to-fit questions fold into the
+   redesign).
+0. **Browser live-confirm of §12 + §13 + §14 (the one thing the agent
+   can't observe):** Participant tab, speak:
    - "draw a cat" → "make the cat orange" → "shade it into a tabby"
    - "draw a cuboid" → "I want the cube to be red"
    - "a hexagon" → "turn this hexagon pink" → "make this hexagon
      three-dimensional" (should be instant — no LLM)
    - "a mouse" → "add two eyes to this mouse" → "make one eye bigger than
      the other" (eyes ~1-2 s; the eye edit instant)
+   - **§14:** after the hexagon chain say "never mind, go back" twice
+     (focus walks back to the plain hexagon, pink/3D children stay
+     visible) then "make it blue" (a blue SIBLING branches). Confirm the
+     view auto-centers on the focused card at every step (the viewport
+     follow — the part only a human can judge).
    Confirm each iteration extends OUTWARD as a new mind-map node, edits land
    on the same shape, and the radial layout/animations feel right.
-   ⚠️ Server currently runs the scout model (70b daily quota spent today).
+   ⚠️ Server currently runs the scout model — but on 2026-06-12 BOTH 70b
+   and scout went quota-dead; the LLM steps (tabby, mouse eyes) need a
+   fresh quota window or a new key. Everything else is deterministic.
 1. **Resume point after that: Drawing Quality D3→D5** (D1/D2 done) — full
    steps in §2, design intent in plan.md §11. D3 = deterministic isometric
    projection (box/cylinder/wedge IR; renderer does the math).
@@ -837,6 +883,10 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-12 | 2D→3D conversion = deterministic **oblique-cabinet extrusion** (front face true shape, 45° up-right half-scale depth, shading = three lightness bands of the shape's own hue) | A true front face is exactly what 30° isometric cannot give; extrusion is math, not taste. The isometric bank stays for canonical solids; extrude handles arbitrary silhouettes in-chain |
 | 2026-06-12 | MODIFY ops carrying pre-baked replacement geometry must emit `modifiers=[]` | The engine folds op.modifiers onto replacement geometry — passing both double-applies (live: whole mouse ×1.3 + eye ×1.69). Pinned by a classifier+engine INTEGRATION test; op-level asserts can't see downstream double-folds |
 | 2026-06-12 | Geometry tests must pin the SIDE/direction, not just counts (extrude regression test: bands protrude up-right for both windings) | The trapezoid-form shoelace has the opposite sign of the cross-product form — the winding flip extruded the BACK edges while every count-based assert stayed green; only the eyeball caught it |
+| 2026-06-12 | Voice undo = meta-command branch 0 in the rules stage (EXEMPT from hazy caps) emitting `OpType.UNDO`; engine moves focus to `parent_ids[0]`; the abandoned child stays ACTIVE; root focus = no-op | The phrase IS the meaning — filler words must not make "never mind, go back" hazy, and undo must never depend on the LLM (quota-immune). User confirmed: "zoom back out" = go back, and history stays visible (no prune/fade). Replay safe for free: FOCUS_CHANGED already folds, statuses re-derive from final focus |
+| 2026-06-12 | Undo guard: "go back to the <X>" where X resolves to a label/shape falls through to FOCUS resolution; parent-chain undo over focus-history undo | "go back to the cat" is a directed focus move, not an undo. Parent-chain semantics need zero new replayed state; focus-history undo (handles cross-root hops) deferred until live use demands it |
+| 2026-06-12 | e2e harness: a LIVE-but-quota-dead LLM = loud SKIP of the LLM-scene step (15 s timeout-tolerant), never a hang | A 429-dead LLM falls back to NOOP → no diff is broadcast → the script hung at the rocket step and the LLM-FREE steps after it never ran. Mock-skip already existed; quota-dead is a distinct environment state. Assertions unchanged when a diff arrives |
+| 2026-06-12 | Viewport follow scrolls to the focused card's LAYOUT coords, not its rendered box | Cards animate left/top over 0.45 s — `scrollIntoView` would chase a mid-transition position; the layout map already holds the final coordinates |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -866,11 +916,11 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 |---|---|---|---|
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
-| Classify (fast) | <0.2 s | **0.05 ms / 0.09 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks |
+| Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks + §14 undo branch 0 |
 | Classify (LLM) | <1.5 s local / <0.8 s Groq | scene create ~1.0/1.8 s; **scene-edit PATCH ~1.2–1.5 s live** (scout); full restyle re-emission ~3.5–5.5 s | ON. Patch edits (add/set/remove parts) are ~3x faster than full re-emission — most §13 edits are patches; many follow-ups (recolor, part size, extrusion) never reach the LLM at all |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
-| Engine apply | (internal) | **0.05 ms / 0.08 ms** | DAG mutation + event append; modify creates + renders a child node (§12) |
-| **End-to-end (server fast path)** | **<5 s** | **0.107 ms / 0.178 ms** | classify+engine+render. ⚠️ p95 0.122→0.178 ms (+46%) EXPLAINED (RULES.md §6): §13 adds part-reference resolution + extrusion routing to the fast path; still ~28,000x under budget |
+| Engine apply | (internal) | **0.05 ms / 0.06 ms** | DAG mutation + event append; modify creates + renders a child node (§12); §14 undo = focus move only |
+| **End-to-end (server fast path)** | **<5 s** | **0.090 ms / 0.128 ms** | classify+engine+render. §14 re-measure: p95 0.178→0.128 ms (undo's branch-0 is one regex; run-to-run variance dominates); ~39,000x under budget |
 
 > Read-back: the server-side fast path stays ~4 orders of magnitude under the
 > 5 s budget. The real human-perceived latency now has two contributors: the

@@ -620,3 +620,54 @@ shades, no LLM call); "a mouse" → "add two eyes" (patch-add, named
 eye-left/eye-right) → "make the left eye bigger" (rules fast path) and
 "make one eye bigger than the other" (LLM set-patch); all §12 behaviors
 unregressed; checks + latency green.
+
+---
+
+## 14. Voice undo & viewport follow (2026-06-12)
+
+### The user intent (live §13 browser feedback, verdict "really nice")
+1. **Voice undo / go-back.** "I don't really like... never mind, go back to
+   the previous situation" must return to the previous iteration so the next
+   edit chains from there. User confirmed (2026-06-12): "zoom back out"
+   meant the SAME thing — go back, not a literal view zoom.
+2. **Iterations land too far away.** Each iteration renders one ring
+   (~270 px) further out, so the active sketch drifts off screen (R6's
+   watch-item, confirmed live).
+3. **The user has a mind-map design reference** (incoming). Any canvas
+   REDESIGN is gated on it; only the minimal, layout-preserving viewport fix
+   ships now.
+
+### Design (segments)
+- **U1 — UNDO op (domain + engine).** New `OpType.UNDO`. Engine: resolve the
+  focused node → `parent_ids[0]` → `_set_focus(parent)`; FOCUS_CHANGED enters
+  the log (replay fold already handles it — no new replayed state). The
+  abandoned child stays ACTIVE and visible (user-confirmed: mind-map history
+  stays on the map; no prune, no fade). Undo with no parent (root focus) =
+  engine no-op (current view back, no event). Repeated undo walks up the
+  trunk. A follow-up MODIFY after undo branches a SIBLING of the abandoned
+  child — iteration-as-branch (§12-R1) unchanged.
+- **U2 — Undo grammar (classify).** A meta-command branch checked BEFORE the
+  content branches and EXEMPT from the hazy caps — the phrase IS the meaning;
+  meta-commands never escalate to the LLM (quota-immune by construction).
+  Vocabulary: undo, go back, revert, scratch that, never mind, zoom (back)
+  out, (go back to the) previous (one/version/situation/step/state). conf
+  0.9, source=rules. Guard: if the utterance also carries a resolvable
+  label/shape reference ("go back to the cat"), defer to the existing FOCUS
+  resolution — undo fires only for bare/previous-situation phrasings.
+- **U3 — Viewport follow (frontend, minimal).** On focus change, smooth-
+  scroll the focused card into view (centered) inside the existing scroll
+  container. NO layout change, NO redesign — that waits for the user's
+  design reference.
+- **U4 — Integration.** e2e: chain a→b→c, "go back" ×2 walks to the root,
+  "make it blue" then branches a SIBLING; §12/§13 chains unregressed;
+  checks + ledger + docs + commit.
+
+### Capability verdict (API vs codebase)
+Codebase only. Undo never touches the LLM (rules branch + engine focus
+move); the viewport fix is client-side. Nothing blocks on a key.
+
+### Acceptance (live, end to end)
+"a hexagon" → "turn this hexagon pink" → "never mind, go back" → focus back
+on the plain hexagon (pink child still visible) → "make it blue" → NEW
+sibling child, blue; "undo" at the root does nothing; the focused card is
+always scrolled into view. All §12/§13 e2e steps unregressed; latency green.
