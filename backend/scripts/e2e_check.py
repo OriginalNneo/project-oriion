@@ -23,7 +23,13 @@ drives a scripted participant through the wire protocol:
                                            resolved recolor child, then a
                                            deterministic cabinet-extruded
                                            prism child in pink shades
-  9. a second client joins late        -> snapshot already holds the nodes
+  9. "never mind, go back" then
+     "go back" then "make it blue"     -> §14 chain: undo walks focus back
+                                          prism -> pink -> hexagon (children
+                                          stay visible, no new nodes), then
+                                          the next MODIFY branches a SIBLING
+                                          of the pink child off the hexagon
+ 10. a second client joins late        -> snapshot already holds the nodes
 
 Exits non-zero on any broken expectation. Run:
 
@@ -89,16 +95,28 @@ async def _drive() -> int:
 
         # 4) live LLM scene (tolerate mock/offline backends). Ask the SERVER
         # which backend it runs — it loads .env itself; our shell env may lie.
+        # A LIVE backend can still be quota-dead (Groq 429s): the LLM stage
+        # then falls back to a NOOP, no diff is broadcast, and waiting any
+        # longer would hang every later (LLM-free) step — skip loudly instead.
         async with httpx.AsyncClient() as http:
             health = (await http.get(f"http://127.0.0.1:{_PORT}/healthz")).json()
         llm_live = health["backends"]["llm"] != "mock"
-        diff = await utter("a rocket with two fins and a round window")
-        rocket = diff["diff"]["upserted"][0] if diff["diff"]["upserted"] else None
-        if llm_live:
+        rocket_diff: dict[str, Any] | None = None
+        try:
+            rocket_diff = await utter("a rocket with two fins and a round window")
+        except TimeoutError:
+            pass
+        rocket = (rocket_diff["diff"]["upserted"][0]
+                  if rocket_diff and rocket_diff["diff"]["upserted"] else None)
+        if not llm_live:
+            print("SKIP LLM scene (backend=mock)")
+        elif rocket_diff is None:
+            print("SKIP LLM scene (live backend, no diff in 15 s — quota-dead 429s?)")
+        else:
             check(rocket is not None and len(rocket["geometry"].get("parts", [])) >= 3,
                   "LLM: rocket scene with >=3 parts")
-        else:
-            print("SKIP LLM scene (backend=mock)")
+        if rocket_diff is not None:
+            diff = rocket_diff  # else: keep step 3's diff (cube stays focused)
 
         # 5) rules modify on focus (iteration-as-branch, plan.md §12 R1).
         # The engine creates a NEW child node; the original node stays in the
@@ -206,7 +224,49 @@ async def _drive() -> int:
             "pink-hued shaded faces",
         )
 
-        # 9) late joiner sees state
+        # 9) §14 chain: voice undo walks the trunk; next modify branches a
+        # sibling. Runs entirely rules-stage (undo never touches the LLM).
+        diff = await utter("never mind, go back")
+        undo_ids = {u["id"] for u in diff["diff"]["upserted"]}
+        check(
+            pink is not None
+            and prism is not None
+            and diff["diff"]["focus_node_id"] == pink["id"]
+            and not (undo_ids - {pink["id"], prism["id"]}),
+            "§14: 'never mind, go back' -> focus returns to the pink child, "
+            "no new nodes",
+        )
+        abandoned = {u["id"]: u for u in diff["diff"]["upserted"]}.get(
+            (prism or {}).get("id", ""))
+        check(
+            abandoned is None or abandoned["status"] != "pruned",
+            "§14: the abandoned prism stays visible (not pruned)",
+        )
+        diff = await utter("go back")
+        check(
+            diff["diff"]["focus_node_id"] == hexagon["id"],
+            "§14: second 'go back' walks to the root hexagon",
+        )
+
+        def blueish(hex_color: str | None) -> bool:
+            if not hex_color or not hex_color.startswith("#") or len(hex_color) != 7:
+                return False
+            r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
+            return b > r and b > g
+
+        diff = await utter("make it blue")
+        blue_id = diff["diff"]["focus_node_id"]
+        blue = {u["id"]: u for u in diff["diff"]["upserted"]}.get(blue_id)
+        check(
+            blue is not None
+            and pink is not None
+            and blue["id"] != pink["id"]
+            and blue["parent_ids"] == [hexagon["id"]]
+            and blueish(blue["geometry"].get("stroke")),
+            "§14: modify after undo branches a blue SIBLING off the hexagon",
+        )
+
+        # 10) late joiner sees state
         async with websockets.connect(_URI) as ws2:
             await ws2.send(json.dumps({"type": "join", "room": "e2e",
                                        "speaker_id": "display", "role": "display"}))
