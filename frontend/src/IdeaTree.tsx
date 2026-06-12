@@ -24,6 +24,7 @@
 //   All pairwise distances ≥ 270 (card diagonal ≈ 269 for 190×190). ✓ no overlap.
 //   After translate, all positions are ≥ PAD. ✓
 
+import { useEffect, useRef } from "react";
 import { useStore } from "./store";
 import { SketchNode } from "./SketchNode";
 import type { NodeView } from "./protocol";
@@ -228,6 +229,7 @@ function NodeCard({
 export function IdeaTree({ big = false }: { big?: boolean }) {
   const nodes = useStore((s) => s.nodes);
   const focusNodeId = useStore((s) => s.focusNodeId);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const cw = big ? 240 : 190;
   const ch = big ? 240 : 190;
@@ -238,6 +240,25 @@ export function IdeaTree({ big = false }: { big?: boolean }) {
   const cards = visible.filter((n) => n.geometry.kind !== "edge");
   const connectors = visible.filter((n) => n.geometry.kind === "edge");
 
+  const { placed, width, height } = layout(cards, cw, ch);
+
+  // Viewport follow (U3, plan.md §14): keep the focused card centered in the
+  // scroll viewport. Scroll to the card's LAYOUT position, not its rendered
+  // box — cards animate left/top over 0.45 s, so the rendered box lags the
+  // final position this effect must target.
+  const focusPlaced = focusNodeId ? placed.get(focusNodeId) : undefined;
+  const fx = focusPlaced ? focusPlaced.x : null;
+  const fy = focusPlaced ? focusPlaced.y : null;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || fx === null || fy === null) return;
+    el.scrollTo({
+      left: Math.max(0, fx + cw / 2 - el.clientWidth / 2),
+      top: Math.max(0, fy + ch / 2 - el.clientHeight / 2),
+      behavior: "smooth",
+    });
+  }, [focusNodeId, fx, fy, cw, ch]);
+
   if (cards.length === 0) {
     return (
       <div className="empty">
@@ -246,8 +267,6 @@ export function IdeaTree({ big = false }: { big?: boolean }) {
       </div>
     );
   }
-
-  const { placed, width, height } = layout(cards, cw, ch);
 
   const center = (id: string): [number, number] | null => {
     const p = placed.get(id);
@@ -267,7 +286,7 @@ export function IdeaTree({ big = false }: { big?: boolean }) {
   }
 
   return (
-    <div className="idea-scroll">
+    <div className="idea-scroll" ref={scrollRef}>
       <div className="idea-canvas" style={{ width, height }}>
         <svg className="idea-edges" width={width} height={height}>
           {derivations.map(({ from, to, dimmed }) => {
