@@ -5,27 +5,37 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches, exact-relation snapping, **clamp/salvage/retry output repair**). Checks green: ruff, mypy, **162 tests**. **Active program:** Drawing Quality D1–D5 (plan.md §11) — **D1 done, D2 done, D3 next**; live-test fix: compositional follow-ups ("add a red sphere inside") land INSIDE the scene.
+> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (+ **named-geometry tier**) → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, restyle, fills, exact-relation snapping, clamp/salvage/retry repair). **§12 Compositional iteration & mind-map canvas — ALL SIX SEGMENTS DONE, e2e ALL PASS, live-probed.** Checks green: ruff, mypy, **272 tests**, tsc, vite build. Next: human browser confirm of the mind map, then D3 (plan.md §11).
 
 ---
 
 ## 1. One-line status
-**Voice MVP (plan.md §1.1) built end to end, drawing intricate shapes; next
-up: make 3D/intricate output actually good (plan.md §11).** Mic toggle →
-browser speech → `utterance` → rules→templates→**LLM cascade** → engine →
-idea tree *with derivation edges* → display. Geometry IR v2 on both
-renderers; **LLM stage C (Groq) ON** with template few-shot, scene extension,
-and deterministic **tangency snapping** (uncommitted — §2 step 1). All checks
-green (ruff, mypy, **114 backend tests**, tsc, vite build); fast path p95
-0.081 ms, LLM classify ~1.0/1.8 s (§7). Known gap: exploded-view 3D — root
-causes diagnosed (§3), fix program planned (plan.md §11).
+**Voice MVP + compositional iteration shipped (plan.md §1.1 + §12): every
+modify now branches a NEW child node (mind-map history), "make the cube red"
+recolors the SAME isometric cuboid deterministically (shading preserved),
+"the cube"/"the cat" resolve by node label on the 0-ms fast path, 18 named
+geometric shapes (rhombus, parallelogram, …) draw instantly, the LLM restyle
+rule survives the eyeball gate (tabby cat keeps every path byte-identical),
+and the canvas is a radial mind map.** All checks green (ruff, mypy, **272
+backend tests**, tsc, vite build); fast path p95 0.122 ms e2e, LLM restyle
+~3.5-5.5 s live. Whole-program `e2e_check.py` ALL PASS incl. the §12
+acceptance chain. Next up: human browser confirm, then D3 — true 3D
+projection (plan.md §11).
 
 ## 2. Current focus
-**Active program (2026-06-11 evening): Drawing Quality D1–D5 — fix the
-"exploded view" 3D failure + weak instruction following. Full design intent in
-plan.md §11; diagnosis details in §3 below.**
+**§12 Compositional iteration & mind-map canvas — DONE (2026-06-12), all
+six segments (see §3 entries):** R1 engine iteration-as-branch ✅ · R2
+deterministic recolor ✅ · R3 labels + label resolution ✅ · R4
+named-geometry tier ✅ · R5 restyle prompt rule (eyeball-gated, one
+refinement round) ✅ · R6 radial mind-map frontend ✅. Built by four parallel
+Sonnet subagents + main thread; integrated, full gate + live probes green.
+**Awaiting the one thing the agent can't do: a human browser pass** — speak
+"draw a cat" → "make the cat orange" → "shade it into a tabby" and "draw a
+cuboid" → "I want the cube to be red", watch the mind map grow outward
+(§4 item 1).
 
-**Resume steps (do these in order next session):**
+**Previous program (2026-06-11): Drawing Quality D1–D5 — D1/D2 done, D3–D5
+resume after the §12 browser confirm. Steps:**
 1. [x] **Exact-relations segment — DONE & COMMITTED** (live re-probe passed
    2026-06-12; needed one fix first — see §3 entry).
 2. [x] **D1 — routing + validation repair — DONE & COMMITTED** (2026-06-12,
@@ -93,6 +103,102 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **§12 INTEGRATION — whole-program verified, live-probed, eyeball-gated
+  (2026-06-12, main thread).** Full gate: ruff, mypy, **272 tests**, latency
+  e2e p95 0.122 ms, tsc + vite build. `e2e_check.py` extended with the §12
+  acceptance chain and ran ALL PASS against a real server + live Groq:
+  "a rhombus" → exact labelled polygon; "draw a cuboid" → labelled isometric
+  template; "i want the cube to be red" → **rules fast path** (no LLM),
+  NEW child node, parent intact, three DISTINCT red-tinted face fills,
+  coordinates byte-identical. Live probe (`probe_llm.py`): "a cat" (template
+  0.02 s) → "make the cat orange" (stage=rules 0.00 s, child node, all 8
+  strokes #ea580c) → "shade it into a tabby with stripes" (stage=llm ~4 s,
+  all 8 cat paths byte-identical + beige hachure fills + thin brown stripes).
+  **R5 eyeball gate: first probe FAILED usefully** — "stripes" came back as
+  one solid brown block over the cat's eyes; one additive prompt line
+  (details = SEVERAL thin shapes ≤4 high near edges, never cover
+  eyes/face/screen) fixed it on re-probe. `probe_llm.py` gotcha fixed:
+  diffs now upsert child+parent, so SVG filenames carry the node id
+  (`probe_<i>_<node>.svg`) — the old per-step name silently overwrote the
+  child's SVG with the parent's. e2e latency note (RULES.md §6, >20%
+  explained): e2e p95 0.072 → 0.122 ms because every MODIFY now creates +
+  renders a child node (intended §12-R1 semantics); still ~4 orders of
+  magnitude under the 5 s budget.
+- **§12 R3+R4 — labels, label resolution & named-geometry tier (classifier)
+  — built (2026-06-12, Sonnet subagent; 80 new tests; 0 regressions in
+  existing test files).** New `domain/shapes.py`: 18 named shapes — polygon
+  generators (rhombus/diamond, parallelogram, trapezoid/trapezium,
+  pentagon→octagon, star, arrow, cross/plus, kite) + constrained-path ones
+  (semicircle, heart, crescent), all validate AND render. `classify.py`:
+  branch 6b emits exact named-shape CREATEs at conf 0.85 with `label=word`;
+  `_resolve_by_label` gives branch 4 (and branch 1 FOCUS) definite-reference
+  resolution against candidate labels — match rule: exact → plural-s →
+  3-char common stem when both words ≥4 chars ("cube"↔"cuboid" via "cub");
+  label-matched tokens count as EXPLAINED before the hazy thresholds, so
+  "i want the cube to be red" is now a clean conf-0.75 fast-path MODIFY.
+  ShapeKind resolution still preferred over label; newest candidate wins.
+  `templates.py` stamps `label=name` on template CREATEs. NOT done (left to
+  LLM path): multi-named-shape scene composition ("a rhombus next to a
+  hexagon" stays hazy→LLM). Watch live: the 3-char stem could over-match
+  rare label pairs ("card"↔"cart") — newest-wins limits the blast radius.
+- **§12 R2 — deterministic recolor (domain) — built (2026-06-12, Sonnet
+  subagent; ruff+mypy clean; 19 new tests in test_recolor.py, all 27
+  geometry-v2 tests green).** New `domain/color.py`: `parse_hex` (#rgb +
+  #rrggbb), rgb↔hsl, `retint(original, target)` = target hue+saturation with
+  `L' = clamp(0.7·L_orig + 0.3·L_target, 0.08, 0.94)` — monotonic in the
+  original lightness (shading order survives) while pulling near-whites
+  toward the target so they read as the color. `apply_modifiers` `color:`
+  branch: fill set → retint fill AND stroke; fill None (stroke-only
+  QuickDraw sketches) → stroke = exact target as before. Cuboid trio
+  verified: #e5e7eb/#9ca3af/#6b7280 + red → #f0a2a2/#e35252/#d02222
+  (ordering preserved). Gotcha: ruff E741 bans `l` — lightness vars are
+  `li`. Unparseable original (CSS name) falls back to the target color.
+- **§12 R1 — Iteration-as-branch (engine) — DONE (2026-06-12).** `engine/state.py`
+  changes (method by method): `_new_node` now uses `op.label or geom.label`
+  (op wins for R3 label inheritance). `_modify`: no-change guard returns early
+  with current view when `new_geom == node.geometry` (no node, no event);
+  real changes create a CHILD node via `_new_node(op, new_geom, parent_ids=[node.id])`,
+  inherit parent label when op label is None, append child id to parent's
+  `children_ids`, record `NODE_MODIFIED` carrying the child's snapshot (replay-
+  safe: snapshot-driven fold registers the child by its new id), set child
+  FOCUSED / parent ACTIVE, move focus via `_set_focus` so FOCUS_CHANGED enters
+  the log. `_MAX_ACTIVE_BRANCHES` raised 8→16 (iteration chains consume cap
+  budget). `_ancestor_ids()` new helper: walks `parent_ids` from focus, cycle-
+  safe, returns the trunk set. `_enforce_caps` updated: both affirmation-floor
+  prune and max-active-cap prune skip trunk nodes. `apply()` unchanged — focus-
+  move logic already adds both ends to upserted; `final_upserts` dedup picks
+  up the parent's updated view. Replay (`from_events`) unchanged — children_ids
+  re-derived from parent_ids as before. Tests: 189 pass (was 178 before this
+  segment; 11 new in `test_iteration_branch.py`, existing tests updated). Fast-
+  path engine p95 = 0.100 ms (well under budget). Event semantics: NODE_MODIFIED
+  carries the CHILD's snapshot; the parent's updated children_ids are re-derived
+  at replay from the child's parent_ids — no replay breakage.
+- **§12 R6 — radial mind-map canvas (frontend) — built (2026-06-12, Sonnet
+  subagent; tsc + vite build clean).** `IdeaTree.tsx` layout rewritten as a
+  pure radial function: single root at the exact center owning the full
+  circle; multiple roots evenly spaced on ring 1 with outward sectors;
+  children subdivide the parent's sector proportionally by subtree LEAF
+  count (memoized, cycle-safe), child at radius `(depth+1)*R` (~270 px) on
+  the sector bisector — so an unforked iteration chain extends straight
+  outward, exactly the asked-for look. Cards keep numeric-id ordering
+  (deterministic), canvas translated to positive coords + sized to extent
+  inside the existing scroll container. CSS: `.node-title` label chip
+  (renders only when `node.label` set), card-enter fade/scale keyframe,
+  0.45 s left/top transition for map reflow. Watch live: 5+-deep chains
+  scroll horizontally; near-vertical sibling edges draw a flat S-curve
+  (acceptable; revisit if ugly).
+- **§12 R5 — restyle prompt rule + op labels (LLM stage) — built (2026-06-12,
+  main thread; ruff+mypy clean; full-suite gate pending integration).**
+  Surgical/additive per the eyeball-gate decision: prompt gains a RESTYLING
+  rule (appearance-only follow-ups re-emit `focus_geometry` with IDENTICAL
+  structure/coords, changing only stroke/fill/fill_style; 3D keeps its shaded
+  faces re-tinted in light/mid/dark of the same hue) + a `label` schema field
+  (1-3 word concept name). `_LLMPayload.label` added; `payload_to_op` stamps
+  `op.label` with a template-match fallback on CREATE/BRANCH ("a snowman" →
+  "snowman") and leaves MODIFY None so the engine inherits the parent's
+  label. `_user_payload` candidates now carry `label` so the model can
+  resolve "the cat" to a node id. DesignOp gained the `label` field
+  (domain/op.py) as the shared contract for R1/R3.
 - **Compositional follow-ups fixed — live-verified (2026-06-12 live test).**
   User's live finding: "draw an isometric box" → "add a red sphere inside"
   drew an EXTERNAL sphere. Root cause: rules branch 7 (bare-modifier MODIFY)
@@ -514,14 +620,20 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
-0. **Resume point: Drawing Quality program D1→D5** (tangency segment done +
-   committed 2026-06-12) — full steps in §2, design intent in plan.md §11.
-1. [x] **Live-mic review** — DONE (see §3). Finding: needs richer geometry.
-2. [x] **Richer geometry — DONE via LLM stage C (tier B).** Stage turned ON
-   (Groq) + prompt teaches polygon/path/text; verified live (see §3). The loop
-   now draws intricate scenes. *Tier A (rules-emit polygons for named shapes,
-   zero-latency) is still worth doing* so common shapes (star/hexagon/arrow)
-   don't pay the ~1 s LLM round-trip — optional follow-up.
+0. **Browser live-confirm of §12 (the one thing the agent can't observe):**
+   human opens the Participant tab and speaks **"draw a cat" → "make the cat
+   orange" → "shade it into a tabby"** and **"draw a cuboid" → "I want the
+   cube to be red"**, plus "a rhombus" — confirm each iteration extends
+   OUTWARD as a new mind-map node (original stays), the recolors land on the
+   same shape, and the radial layout/animations feel right.
+1. **Resume point after that: Drawing Quality D3→D5** (D1/D2 done) — full
+   steps in §2, design intent in plan.md §11. D3 = deterministic isometric
+   projection (box/cylinder/wedge IR; renderer does the math).
+2. [x] **Live-mic review** — DONE (see §3). Finding: needs richer geometry.
+3. [x] **Richer geometry — DONE via LLM stage C (tier B).** Stage turned ON
+   (Groq) + prompt teaches polygon/path/text; verified live (see §3).
+   *Tier A is now DONE too* — §12 R4's named-geometry tier (18 exact shapes,
+   0 ms, no LLM round-trip).
    - **Live-confirm in the browser:** human refreshes the Participant tab and
      speaks "a star", "a house with two windows", "a robot" — confirm the
      sketch tab draws them (this is the one thing the agent can't observe).
@@ -582,6 +694,11 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-12 | Extend-intent escalation: ADD verbs/placement words with a focus make any rules match hazy; bare-modifier MODIFY (branch 7) goes hazy on even ONE unexplained word | Live test: "add a red sphere inside" was hijacked by the modifier-fold branch at 0.70 — composing INTO a scene is structurally beyond rules. "make it bigger" (0 unexplained, no extend words) keeps the fast path |
 | 2026-06-12 | Containment is snapped deterministically (`_snap_all_inside`): new parts outside the old parts' union box get centered into it (shrunk only if oversized); `payload_to_op` carries `focus_geometry` to tell old from new | Same model-proposes-code-disposes pattern as tangency: "inside" IS the meaning; the LLM supplies the part, the code guarantees the containment |
 | 2026-06-12 | Per-test `pytest-timeout` 30 s with `timeout_method=thread` | Finally sampled the live deadlock: main thread in TestClient portal cond-wait + anyio loop thread in kevent — confirmed at C level. A thread-method timeout converts the next infinite hang into a 30 s failure WITH every thread's Python stack (the missing diagnostic) |
+| 2026-06-12 | **Iteration-as-branch**: a MODIFY that effects a change creates a CHILD node (focus moves to it); no-change MODIFYs are no-ops; focus's ancestor chain exempt from auto-prune, cap 8→16 | User wants a mind map: "make the cat orange" must keep the original cat visible and extend outward. Replay untouched (snapshot-driven fold); the trunk must never be pruned out from under the focused tip |
+| 2026-06-12 | Recolor is deterministic: `retint` = target hue+sat at `L' = 0.7·L_orig + 0.3·L_target` (fills AND strokes when fill set; exact color when stroke-only) | "Make the cube red" must keep the three-face shading — preserving relative lightness IS the shading; the 0.3 pull keeps near-white faces from washing out. LLMs don't do color arithmetic; this is the tangency pattern applied to color |
+| 2026-06-12 | Nodes carry a concept `label` (template name / shape word / LLM-supplied, with template-match fallback); "the cube"-style references resolve by label (exact → plural → 3-char stem, ≥4-char words); label-matched tokens count as EXPLAINED in the hazy calc | "I want the cube to be red" went hazy→LLM→flat redraw because resolution was ShapeKind-only and "cube" looked unexplained. Label resolution keeps appearance follow-ups on the 0-ms fast path. Watch: stem match can over-pair rare labels ("card"/"cart"); newest-wins bounds it |
+| 2026-06-12 | Named geometric shapes are CODE generators (`domain/shapes.py`, 18 words → exact polygons/paths) at rules conf 0.85, not templates and not LLM work | A rhombus is math, not taste — same reasoning as the computed isometric bank. Works in every backend config (template stage only exists when LLM is on) and composes with the modifier fold |
+| 2026-06-12 | LLM RESTYLE rule: appearance-only follow-ups re-emit `focus_geometry` byte-identical, changing only stroke/fill/fill_style; detail parts (stripes) = several thin shapes near edges, never blocks over features | First eyeball probe drew "stripes" as one brown block over the cat's eyes — the quality bar is structural preservation + unobtrusive detail. Color-only cases never reach the LLM at all (label resolution handles them) |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -611,11 +728,11 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 |---|---|---|---|
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
-| Classify (fast) | <0.2 s | **0.02 ms / 0.03 ms** | rules stage incl. scenes/prune/connect/colors |
-| Classify (LLM) | <1.5 s local / <0.8 s Groq | **~1.0 s / ~1.8 s** (Groq `llama-3.3-70b-versatile`, 6 intricate utterances) | ON. Simple shapes (star/arrow polygon) ~0.7 s; full scenes ("a robot") ~1.8 s — **over the 0.8 s sub-target for the heavy case**, but only fires on rules-NOOP utterances and stays well inside the 5 s end-to-end budget. Tune model/threshold if the tail bites |
+| Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/prune/connect/colors + §12 label resolution & named shapes |
+| Classify (LLM) | <1.5 s local / <0.8 s Groq | **~1.0 s / ~1.8 s** (Groq `llama-3.3-70b-versatile`, 6 intricate utterances); restyle ("tabby") **~3.5–5.5 s live** | ON. Only fires on rules-NOOP/hazy utterances; color-only follow-ups now NEVER reach it (label-resolved fast path). Restyle tail is heavy but rare — D4's tiered models are the lever |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
-| Engine apply | (internal) | **0.03 ms / 0.04 ms** | DAG mutation + event append (incl. new focus/diff bookkeeping) |
-| **End-to-end (server fast path)** | **<5 s** | **0.053 ms / 0.072 ms** | classify+engine+render; the budget is effectively all browser-STT/LLM headroom |
+| Engine apply | (internal) | **0.04 ms / 0.05 ms** | DAG mutation + event append; §12 modify additionally creates + renders a child node |
+| **End-to-end (server fast path)** | **<5 s** | **0.085 ms / 0.122 ms** | classify+engine+render. ⚠️ p95 0.072→0.122 ms (+69%) is EXPLAINED, not a regression (RULES.md §6): §12-R1 makes every modify create + render a new child node by design; still ~40,000x under budget |
 
 > Read-back: the server-side fast path stays ~4 orders of magnitude under the
 > 5 s budget. The real human-perceived latency now has two contributors: the

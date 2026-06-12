@@ -10,7 +10,13 @@ drives a scripted participant through the wire protocol:
   4. "a rocket with two fins"          -> live LLM scene (skipped cleanly if
                                           the backend is mock/offline)
   5. "make it bigger"                  -> rules MODIFY on the focus
-  6. a second client joins late        -> snapshot already holds the nodes
+  6. "a rhombus"                       -> named-geometry tier (plan.md §12 R4)
+  7. "draw a cuboid" then
+     "i want the cube to be red"       -> label-resolved fast-path MODIFY:
+                                          NEW child node, parent intact,
+                                          fills re-tinted red, coords
+                                          byte-identical (§12 R1-R3)
+  8. a second client joins late        -> snapshot already holds the nodes
 
 Exits non-zero on any broken expectation. Run:
 
@@ -87,21 +93,81 @@ async def _drive() -> int:
         else:
             print("SKIP LLM scene (backend=mock)")
 
-        # 5) rules modify on focus. A group's own width stays put while its
-        # parts scale around the center, so compare the parts' footprint.
+        # 5) rules modify on focus (iteration-as-branch, plan.md §12 R1).
+        # The engine creates a NEW child node; the original node stays in the
+        # snapshot unchanged. Compare the child's parts footprint to the
+        # original focus's footprint to confirm growth.
         def footprint(geom: dict[str, Any]) -> float:
             parts = geom.get("parts") or [geom]
             left = min(float(p["x"]) - float(p["width"]) / 2 for p in parts)
             right = max(float(p["x"]) + float(p["width"]) / 2 for p in parts)
             return right - left
 
-        before = (rocket or cube)["geometry"]
+        focus_before_id = diff["diff"]["focus_node_id"]  # id of node before "bigger"
+        before_geom = (rocket or cube)["geometry"]
         diff = await utter("make it bigger")
-        bigger = diff["diff"]["upserted"][0]["geometry"]
-        check(footprint(bigger) > footprint(before),
-              "rules: 'make it bigger' grows the focused sketch")
+        # The diff must contain a NEW node (different id from previous focus).
+        new_focus_id = diff["diff"]["focus_node_id"]
+        check(new_focus_id != focus_before_id,
+              "rules: 'make it bigger' creates a NEW focused child node")
+        # Find the new focused node in upserted.
+        upserted_by_id = {u["id"]: u for u in diff["diff"]["upserted"]}
+        child_geom = upserted_by_id.get(new_focus_id, {}).get("geometry", {})
+        check(footprint(child_geom) > footprint(before_geom),
+              "rules: new child's footprint grew relative to parent")
 
-        # 6) late joiner sees state
+        # 6) named-geometry tier (plan.md §12 R4): exact polygon, no LLM.
+        diff = await utter("a rhombus")
+        rhombus = diff["diff"]["upserted"][0]
+        check(
+            rhombus["geometry"]["kind"] == "polygon"
+            and len(rhombus["geometry"].get("points") or []) >= 4
+            and rhombus["label"] == "rhombus",
+            "named shape: 'a rhombus' -> exact labelled polygon",
+        )
+
+        # 7) the §12 acceptance chain: cuboid -> label-resolved recolor.
+        diff = await utter("draw a cuboid")
+        cuboid = diff["diff"]["upserted"][0]
+        check(
+            cuboid["label"] == "cuboid" and len(cuboid["geometry"]["parts"]) >= 3,
+            "template: 'draw a cuboid' -> labelled isometric cuboid",
+        )
+
+        def reddish(hex_color: str | None) -> bool:
+            if not hex_color or not hex_color.startswith("#") or len(hex_color) != 7:
+                return False
+            r, g, b = (int(hex_color[i : i + 2], 16) for i in (1, 3, 5))
+            return r > g and r > b
+
+        diff = await utter("i want the cube to be red")
+        red_id = diff["diff"]["focus_node_id"]
+        upserted_by_id = {u["id"]: u for u in diff["diff"]["upserted"]}
+        red = upserted_by_id.get(red_id)
+        # "the cube" may resolve to the "cuboid" (newest, stem match) or the
+        # step-3 "cube" node (exact label match) — both are correct §12-R3
+        # resolutions; what matters is a NEW child of a cube-ish parent.
+        cube_parents = {cuboid["id"]: cuboid, cube["id"]: cube}
+        parent_node = cube_parents.get(((red or {}).get("parent_ids") or [None])[0])
+        check(
+            red is not None and red["id"] not in cube_parents and parent_node is not None,
+            "'the cube' resolves by label; recolor lands as a NEW child node",
+        )
+        if red is not None and parent_node is not None:
+            child_parts = red["geometry"]["parts"]
+            parent_parts = parent_node["geometry"]["parts"]
+            filled = [p for p in child_parts if p.get("fill")]
+            check(
+                len(filled) >= 3 and all(reddish(p["fill"]) for p in filled)
+                and len({p["fill"] for p in filled}) >= 3,
+                "recolor: three distinct red-tinted face fills (shading kept)",
+            )
+            check(
+                [p.get("points") for p in child_parts] == [p.get("points") for p in parent_parts],
+                "recolor: child coordinates byte-identical to the parent cuboid",
+            )
+
+        # 8) late joiner sees state
         async with websockets.connect(_URI) as ws2:
             await ws2.send(json.dumps({"type": "join", "room": "e2e",
                                        "speaker_id": "display", "role": "display"}))
