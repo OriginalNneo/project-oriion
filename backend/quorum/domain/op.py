@@ -48,6 +48,11 @@ class DesignOp(BaseModel):
     preference_signal: float = Field(default=0.0, ge=-1.0, le=1.0)
     # An explicit geometry the classifier already resolved (rules path often can).
     geometry: GeometrySpec | None = None
+    # Human concept name for the node this op creates ("cat", "cuboid",
+    # "rhombus"). The engine stores it on the IdeaNode (mind-map title) and
+    # iterations inherit it; classifiers resolve "the cube"-style references
+    # against it (plan.md §12 R3). Never rendered inside the sketch.
+    label: str | None = None
 
     # Provenance / trust.
     speaker_id: str

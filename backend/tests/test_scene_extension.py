@@ -336,6 +336,9 @@ def _scene(parts: list[GeometrySpec]) -> GeometrySpec:
 
 
 def test_modify_with_geometry_replaces_scene() -> None:
+    """MODIFY with replacement geometry creates a child node carrying the new
+    scene (iteration-as-branch, plan.md §12 R1). The child is the first upserted
+    node; the parent is upserted afterwards with updated children_ids."""
     eng = DesignStateEngine(room="t", clock=FixedClock())
     created = eng.apply(
         DesignOp(
@@ -367,12 +370,21 @@ def test_modify_with_geometry_replaces_scene() -> None:
             utterance_id="u2",
         )
     )
-    node = diff.upserted[0]
-    assert [p.name for p in node.geometry.parts] == ["funnel-body", "thruster-1", "thruster-2"]
-    assert node.svg and node.svg.startswith("<svg")
+    # The CHILD node (first upserted) carries the extended scene.
+    child = diff.upserted[0]
+    assert [p.name for p in child.geometry.parts] == ["funnel-body", "thruster-1", "thruster-2"]
+    assert child.svg and child.svg.startswith("<svg")
+    # The parent is still in the tree with its original (unmodified) geometry.
+    parent_view = next(v for v in diff.upserted if v.id == created.id)
+    assert [p.name for p in parent_view.geometry.parts] == ["funnel-body"]
+    # Focus moved to the child.
+    assert eng.focus_node_id == child.id
+    assert child.id != created.id
 
 
-def test_modify_without_geometry_still_mutates_in_place() -> None:
+def test_modify_without_geometry_creates_child_node() -> None:
+    """MODIFY with a modifier (no replacement geometry) branches into a child
+    node carrying the updated geometry (plan.md §12 R1). Original is preserved."""
     eng = DesignStateEngine(room="t", clock=FixedClock())
     created = eng.apply(
         DesignOp(
@@ -383,6 +395,7 @@ def test_modify_without_geometry_still_mutates_in_place() -> None:
             utterance_id="u1",
         )
     ).upserted[0]
+    orig_width = created.geometry.width
     diff = eng.apply(
         DesignOp(
             op_type=OpType.MODIFY,
@@ -392,7 +405,13 @@ def test_modify_without_geometry_still_mutates_in_place() -> None:
             utterance_id="u2",
         )
     )
-    assert diff.upserted[0].geometry.width > 20
+    # First upserted node is the child with the bigger geometry.
+    child = diff.upserted[0]
+    assert child.geometry.width > orig_width
+    assert child.id != created.id
+    # Original node geometry is unchanged (still present in the tree).
+    snap = {n.id: n for n in eng.snapshot().nodes}
+    assert snap[created.id].geometry.width == orig_width
 
 
 def test_classifier_context_carries_focus_geometry() -> None:

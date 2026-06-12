@@ -38,7 +38,9 @@ _log = get_logger("engine")
 _SIBLING_DX = 22.0  # abstract-unit horizontal offset between sibling variants
 _FOCUS_BUMP = 0.6  # affirmation added when a node is explicitly focused
 _PRUNE_THRESHOLD = -0.8  # below this affirmation, a branch auto-prunes
-_MAX_ACTIVE_BRANCHES = 8  # cap on the idea cloud before pruning the weakest
+# Raised from 8 to 16: iteration chains consume budget faster now that MODIFY
+# creates a child node per change (plan.md §12 R1).
+_MAX_ACTIVE_BRANCHES = 16  # cap on the idea cloud before pruning the weakest
 
 
 @dataclass
@@ -202,13 +204,43 @@ class DesignStateEngine:
             return None
         # An op may carry replacement geometry (the LLM stage re-emits the full
         # scene to extend it — "add five thrusters"); textual modifiers still
-        # fold on top. Without geometry, modify keeps mutating in place.
+        # fold on top.
         base_geom = op.geometry if op.geometry is not None else node.geometry
         new_geom = self._apply_modifiers(base_geom, op)
-        node.geometry = new_geom
-        node.svg = self._render(new_geom, op.utterance_id)
-        self._record(EventType.NODE_MODIFIED, op, node)
-        return node_to_view(node)
+
+        # No-change guard: if the geometry didn't actually change, do nothing.
+        # This avoids spawning empty iteration nodes for bare MODIFY ops with no
+        # effective modifiers (plan.md §12 R1).
+        if new_geom == node.geometry:
+            return node_to_view(node)
+
+        # Iteration-as-branch (plan.md §12 R1): a real change creates a CHILD
+        # node so the mind-map trunk stays visible. The parent's geometry is
+        # preserved intact; focus moves to the child for chaining follow-ups.
+        child = self._new_node(op, new_geom, parent_ids=[node.id])
+        # Inherit the parent's label when the op didn't supply one explicitly.
+        if child.label is None:
+            child.label = node.label
+        # Link the child into the parent's children list.
+        node.children_ids = [*node.children_ids, child.id]
+        self._nodes[child.id] = child
+
+        # NODE_MODIFIED carries the CHILD's snapshot. Because replay is
+        # snapshot-driven (from_events upserts each node by id from ev.node),
+        # a new node id in a NODE_MODIFIED event folds correctly — the child is
+        # registered and the parent's children_ids are re-derived from parent_ids.
+        self._record(EventType.NODE_MODIFIED, op, child)
+
+        # Move focus to the child; FOCUS_CHANGED enters the log so replay lands
+        # on the same focus the live session had.
+        child.status = NodeStatus.FOCUSED
+        if node.status == NodeStatus.FOCUSED:
+            node.status = NodeStatus.ACTIVE
+        self._set_focus(child.id, op)
+
+        # Return both the child (the main change) and the parent (children_ids
+        # changed). apply()'s dedup pass keeps only the final per-node view.
+        return node_to_view(child)
 
     def _focus(self, op: DesignOp) -> list[NodeView]:
         target_id = op.target_node_id or self._focus_id
@@ -276,6 +308,8 @@ class DesignStateEngine:
             return self.renderer.render(geom)
 
     def _new_node(self, op: DesignOp, geom: GeometrySpec, *, parent_ids: list[str]) -> IdeaNode:
+        # op.label wins over geom.label so an explicit human concept name
+        # ("cat", "cuboid") is preserved through iteration children (plan.md §12 R1/R3).
         node = IdeaNode(
             id=self._ids.next(),
             geometry=geom,
@@ -289,7 +323,7 @@ class DesignStateEngine:
             ),
             affirmation_score=max(0.0, op.preference_signal),
             status=NodeStatus.ACTIVE,
-            label=geom.label,
+            label=op.label or geom.label,
         )
         return node
 
@@ -349,19 +383,45 @@ class DesignStateEngine:
         best.status = NodeStatus.FOCUSED
         return best.id
 
+    def _ancestor_ids(self) -> set[str]:
+        """Return the set of node ids on the focus's ancestor chain (cycle-safe).
+
+        These nodes form the mind-map trunk and must never be auto-pruned
+        (plan.md §12 R1 — the trunk must stay visible).
+        """
+        exempt: set[str] = set()
+        if self._focus_id is None:
+            return exempt
+        queue = [self._focus_id]
+        while queue:
+            nid = queue.pop()
+            if nid in exempt:
+                continue
+            exempt.add(nid)
+            node = self._nodes.get(nid)
+            if node is not None:
+                queue.extend(node.parent_ids)
+        return exempt
+
     def _enforce_caps(self) -> list[NodeView]:
-        """Auto-prune to keep the idea cloud bounded (plan.md §4)."""
+        """Auto-prune to keep the idea cloud bounded (plan.md §4).
+
+        Nodes on the focus's ancestor chain (the mind-map trunk) are exempt from
+        both the affirmation-floor prune and the max-active-cap prune so the full
+        iteration history stays visible (plan.md §12 R1).
+        """
+        exempt = self._ancestor_ids()
         active = [n for n in self._nodes.values() if n.status != NodeStatus.PRUNED]
         pruned: list[NodeView] = []
         # 1) prune anything below the negative-affirmation floor
         for n in active:
-            if n.affirmation_score <= _PRUNE_THRESHOLD and n.id != self._focus_id:
+            if n.affirmation_score <= _PRUNE_THRESHOLD and n.id not in exempt:
                 pruned.extend(self._prune_node(n.id, None))
-        # 2) enforce the max-active cap, pruning weakest (never the focus)
+        # 2) enforce the max-active cap, pruning weakest (never exempt nodes)
         active = [n for n in self._nodes.values() if n.status != NodeStatus.PRUNED]
         if len(active) > _MAX_ACTIVE_BRANCHES:
             weakest = sorted(
-                (n for n in active if n.id != self._focus_id),
+                (n for n in active if n.id not in exempt),
                 key=lambda n: n.affirmation_score,
             )
             overflow = len(active) - _MAX_ACTIVE_BRANCHES
