@@ -17,6 +17,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, model_validator
 
 from quorum.domain import pathdata
+from quorum.domain.color import retint
 
 
 class ShapeKind(StrEnum):
@@ -188,5 +189,14 @@ def apply_modifiers(geom: GeometrySpec, modifiers: list[str]) -> GeometrySpec:
         elif m.startswith("color:"):
             color = m.split(":", 1)[1].strip()
             if color:
-                updates["stroke"] = color
+                if geom.fill is not None:
+                    # Re-tint filled shapes: adopt target hue/saturation while
+                    # preserving relative lightness so shading survives (the
+                    # cuboid's light/mid/dark grays become light/mid/dark reds).
+                    updates["fill"] = retint(geom.fill, color)
+                    updates["stroke"] = retint(geom.stroke, color)
+                else:
+                    # Stroke-only sketch (QuickDraw line drawings): set the
+                    # stroke exactly to the requested color, unchanged.
+                    updates["stroke"] = color
     return geom.model_copy(update=updates) if updates else geom

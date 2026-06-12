@@ -62,8 +62,11 @@ def test_branch_links_as_sibling_and_offsets() -> None:
 
 
 def test_modify_applies_fillet_to_focus() -> None:
+    """MODIFY creates a child node (iteration-as-branch). The child carries the
+    new geometry; the parent is untouched. Focus moves to the child."""
     eng = _engine()
     nid = eng.apply(_create(ShapeKind.RECTANGLE)).upserted[0].id
+    orig_radius = 0.0  # default rectangle has no fillet
     mod = DesignOp(
         op_type=OpType.MODIFY,
         target_node_id=nid,
@@ -71,8 +74,16 @@ def test_modify_applies_fillet_to_focus() -> None:
         speaker_id="alice",
         utterance_id="u3",
     )
-    out = eng.apply(mod).upserted[0]
-    assert out.geometry.corner_radius >= 12.0
+    diff = eng.apply(mod)
+    # First upserted node is the new child.
+    child = diff.upserted[0]
+    assert child.geometry.corner_radius >= 12.0
+    assert child.id != nid
+    # Parent geometry unchanged.
+    snap = {n.id: n for n in eng.snapshot().nodes}
+    assert snap[nid].geometry.corner_radius == orig_radius
+    # Focus moved to child.
+    assert eng.focus_node_id == child.id
 
 
 def test_focus_bumps_affirmation_and_marks_status() -> None:
