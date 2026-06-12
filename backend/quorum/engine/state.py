@@ -138,6 +138,8 @@ class DesignStateEngine:
                     upserted.append(node)
             elif op.op_type == OpType.NOOP:
                 _log.debug("noop_op", utterance_id=op.utterance_id)
+            elif op.op_type == OpType.UNDO:
+                upserted.extend(self._undo(op))
             else:  # pragma: no cover - exhaustive guard
                 _log.warning("unknown_op_type", op_type=op.op_type)
 
@@ -298,6 +300,42 @@ class DesignStateEngine:
             endpoint.children_ids = [*endpoint.children_ids, edge.id]
         self._record(EventType.NODES_CONNECTED, op, edge)
         return node_to_view(edge)
+
+    def _undo(self, op: DesignOp) -> list[NodeView]:
+        """Move focus to the parent of the currently focused node (go back).
+
+        The abandoned child is NOT pruned — it stays ACTIVE and visible
+        (user-confirmed design: "never mind, go back" keeps the child so the
+        mind-map trunk remains intact). If focus is already at a root node (no
+        parent), this is a no-op: no event is appended, current view is returned.
+        """
+        focus_node = self._nodes.get(self._focus_id) if self._focus_id else None
+        if focus_node is None:
+            return []
+
+        # Root node (no parents) — no-op: no event, return empty list so
+        # apply() still emits the current view via the final dedup pass.
+        if not focus_node.parent_ids:
+            _log.debug("undo_at_root", utterance_id=op.utterance_id)
+            return []
+
+        # Take the first parent as the undo target (iteration chains are linear).
+        parent_id = focus_node.parent_ids[0]
+        parent = self._nodes.get(parent_id)
+        if parent is None:
+            return []
+
+        # Move focus to the parent — _set_focus appends FOCUS_CHANGED so replay
+        # lands on the correct focus.
+        self._set_focus(parent_id, op)
+
+        # Update statuses so clients render the correct highlight state.
+        # The old focus node stays ACTIVE (not pruned, not faded).
+        focus_node.status = NodeStatus.ACTIVE
+        parent.status = NodeStatus.FOCUSED
+
+        # Both ends of the focus move must reach clients.
+        return [node_to_view(focus_node), node_to_view(parent)]
 
     # ------------------------------------------------------------------ #
     # Helpers                                                            #

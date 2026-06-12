@@ -25,6 +25,7 @@ class OpType(StrEnum):
     PRUNE = "prune"  # collapse/remove a branch
     CONNECT = "connect"  # workflow mode: draw an edge between two nodes
     NOOP = "noop"  # classified as not a design intent (chit-chat)
+    UNDO = "undo"  # move focus to the current node's parent (go back)
 
 
 class DesignOp(BaseModel):
