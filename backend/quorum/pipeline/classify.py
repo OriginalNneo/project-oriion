@@ -23,13 +23,22 @@ import re
 from typing import Any
 
 from quorum.config.settings import Backend
+from quorum.domain.extrude import extrude
 from quorum.domain.geometry import GeometrySpec, ShapeKind, apply_modifiers
 from quorum.domain.messages import DemoOpMessage
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
+from quorum.domain.parts import apply_to_parts, resolve_parts
 from quorum.domain.shapes import NAMED_SHAPES, named_shape
 from quorum.observability.latency import stage_timer
 from quorum.pipeline.intent import _3D_INTENT_RE
 from quorum.pipeline.interfaces import Classifier
+
+# The verb "extrude" also signals 3D intent but is not in the shared _3D_INTENT_RE
+# (kept there for import-cycle reasons). Match it here locally.
+_EXTRUDE_VERB_RE = re.compile(r"\bextrude\b", re.IGNORECASE)
+
+# Determiners that introduce a definite reference (N1: this/that/my/our join "the").
+_DEFINITE_DET_RE = re.compile(r"\b(?:the|this|that|my|our)\b")
 
 # Shape keyword table. Phase 4 moves the long tail to embeddings/LLM.
 _SHAPE_WORDS: dict[str, ShapeKind] = {
@@ -261,21 +270,64 @@ class RulesClassifier:
         # Either way: emit the match below the cascade threshold so the LLM
         # stage handles it (and the rules op stays as the dead-LLM fallback).
         unexplained = [w for w in self._unexplained_words(lowered) if w not in label_explained]
+        has_3d = (
+            _3D_INTENT_RE.search(lowered) is not None
+            or _EXTRUDE_VERB_RE.search(lowered) is not None
+        )
         hazy = (
             len(unexplained) >= 2
             or _RELATION_RE.search(lowered) is not None
-            or _3D_INTENT_RE.search(lowered) is not None
+            or has_3d
             or (focus_node_id is not None and _EXTEND_RE.search(lowered) is not None)
         )
 
+        # N4-A) 3D-intent + reference to an EXISTING node that IS the focus.
+        # "make this hexagon three dimensional" / "make it 3d" / "extrude this".
+        # Only fires when focus_geometry is available (we need the shape data).
+        # "make the left eye 3d" (part-scoped) stays hazy — left/right qualifiers
+        # together with 3D intent are out of scope in v1.
+        if has_3d and focus_node_id is not None and context.focus_geometry is not None:
+            # Resolve whether the utterance is aimed at the focus or at a
+            # different named node.  A bare deictic ("it", "this", "that") with
+            # no other named reference counts as targeting the focus.
+            named_target = self._resolve_named(
+                self._find_definite_shape(lowered), context
+            )
+            if named_target is None:
+                named_target = self._resolve_by_label(
+                    lowered, context, definite_only=True
+                )
+            target_is_focus = named_target is None or named_target == focus_node_id
+            # Guard: if a part-qualifier word is present together with 3D intent,
+            # punt to LLM (part-scoped 3D is out of scope in v1).
+            has_part_qualifier = bool(
+                re.search(r"\b(left|right|top|bottom|biggest|smallest|eye|nose|ear)\b", lowered)
+            )
+            if target_is_focus and not has_part_qualifier:
+                extruded = extrude(context.focus_geometry)
+                if extruded is not None:
+                    return op(
+                        op_type=OpType.MODIFY,
+                        target_node_id=focus_node_id,
+                        modifiers=modifiers,
+                        geometry=extruded,
+                        confidence=0.8,
+                    )
+                # extrude returned None (multi-part group or unsupported kind) →
+                # fall through to hazy escalation below.
+
         # 4) modify a *named existing* node ("make the circle bigger/red").
-        # The definite article is the discriminator: "the circle" refers to an
-        # existing node; "a circle" asks for a new one.
-        # R3: try ShapeKind resolution first; fall back to label resolution.
+        # N1: _find_definite_shape and _resolve_by_label now accept this/that/my/our
+        # as definite determiners — "turn this hexagon pink" resolves correctly.
+        # Branch ORDER guarantee: when modifiers exist AND a determiner+shape/label
+        # word resolves to an existing node, this MODIFY branch wins over branch 6b
+        # CREATE (the named-shape tier) — so "turn this hexagon pink" MODIFIES the
+        # focused hexagon node, it does NOT create a new one.
         if modifiers:
             named = self._find_definite_shape(lowered)
             target = self._resolve_named(named, context)
-            # R3 label fallback: "the cube" can match a node labelled "cuboid"
+            # R3 / N1 label fallback: "the cube" / "this hexagon" can match a
+            # node labelled "cuboid" / "hexagon".
             if target is None:
                 target = self._resolve_by_label(lowered, context, definite_only=True)
             if target is not None:
@@ -303,6 +355,13 @@ class RulesClassifier:
 
         # 6) shape word -> CREATE or BRANCH (branch when a variant is implied
         # and there is a focus to branch from).
+        # N4-B NOTE: basic _SHAPE_WORDS (rectangle/box/circle/etc.) are NOT
+        # given the extrusion CREATE freebie here.  The D1 contract (pinned in
+        # test_d1_routing.py) requires that 3D-flagged basic-shape utterances
+        # ("a 3D box", "a three dimensional circle") always emit hazy (0.5) so
+        # the cascade can escalate to the template stage (which maps them to
+        # isometric equivalents like "cuboid").  The extrusion freebie only fires
+        # for NAMED_SHAPES (hexagon, star, etc.) in branch 6b below.
         shape = self._find_shape(lowered)
         if shape is not None:
             is_branch = focus_node_id is not None and any(h in lowered for h in _BRANCH_HINTS)
@@ -323,12 +382,33 @@ class RulesClassifier:
         # 6b) R4 named-geometry tier: exact polygon/path generators for
         # math-named shapes (rhombus, hexagon, star, etc.) that have no
         # ShapeKind entry.  CREATE conf 0.85 (or hazy-capped as usual).
+        # N4-B: same CREATE freebie as branch 6 for named shapes.
         nm = _NAMED_SHAPE_RE.search(lowered)
         if nm is not None:
             word = nm.group(1)
             spec = named_shape(word)
             if spec is not None:
                 is_branch = focus_node_id is not None and any(h in lowered for h in _BRANCH_HINTS)
+                # N4-B CREATE freebie: 3D + no existing ref → extrude named shape.
+                if has_3d and not is_branch:
+                    named_ref = self._resolve_named(
+                        self._find_definite_shape(lowered), context
+                    )
+                    if named_ref is None:
+                        named_ref = self._resolve_by_label(
+                            lowered, context, definite_only=True
+                        )
+                    if named_ref is None:
+                        extruded = extrude(spec)
+                        if extruded is not None:
+                            return op(
+                                op_type=OpType.CREATE,
+                                target_shape=ShapeKind.GROUP,
+                                modifiers=modifiers,
+                                geometry=apply_modifiers(extruded, modifiers),
+                                label=word,
+                                confidence=0.8,
+                            )
                 geom = apply_modifiers(spec, modifiers)
                 return op(
                     op_type=OpType.BRANCH if is_branch else OpType.CREATE,
@@ -340,14 +420,52 @@ class RulesClassifier:
                     confidence=_HAZY_CONFIDENCE if hazy else 0.85,
                 )
 
+        # 6c) N2 — part-scoped fast path: focus exists, focus_geometry is set,
+        # modifiers are non-empty, and the utterance resolves ≥ 1 part names.
+        # "make the left eye bigger" / "turn the eyes red".
+        # This is placed BEFORE branch 7 so a resolvable part reference wins over
+        # the bare-modifier whole-scene fold.
+        if modifiers and focus_node_id is not None and context.focus_geometry is not None:
+            part_names = resolve_parts(context.focus_geometry, lowered)
+            if part_names:
+                # Part tokens that matched count as explained — compute after
+                # resolving so we subtract them from the unexplained set.
+                patched = apply_to_parts(context.focus_geometry, part_names, modifiers)
+                # modifiers are already BAKED into the geometry — the engine
+                # folds op.modifiers onto replacement geometry, so passing them
+                # through would double-apply (live: the whole mouse grew x1.3
+                # and the eye x1.69 on "make one eye bigger").
+                return op(
+                    op_type=OpType.MODIFY,
+                    target_node_id=focus_node_id,
+                    modifiers=[],
+                    geometry=patched,
+                    confidence=0.75,
+                )
+
         # 7) bare modifier ("make it bigger") -> MODIFY the focus. A color word
         # inside a rich utterance ("a snowman with a red scarf") is NOT a bare
         # modifier — the hazy cap sends those to the LLM stage. Here even ONE
         # unexplained word ("add a red SPHERE") means the utterance asks for
         # more than a modifier fold can express — that too is LLM work.
+        #
+        # N2 Fallback inversion: when the utterance contains a determiner
+        # (the/this/that/my/our/one) followed within 2 words by an unexplained
+        # word, the user referenced something we cannot resolve (e.g. "the nose",
+        # "the whiskers").  Folding the modifier onto the whole scene would be
+        # WRONG — e.g. "make the left eye bigger" scaling the whole mouse.
+        # In this case emit NOOP conf 0.5 so the cascade escalates; if the LLM
+        # is dead, NOTHING happens (never a wrong whole-scene MODIFY).
+        # "make it bigger" (no determiner + unexplained word) remains fast 0.7.
         if modifiers and focus_node_id is not None:
             extra = [w for w in self._unexplained_words(lowered) if w not in label_explained]
             hazy_modify = hazy or len(extra) >= 1
+            # N2 inversion: detect an unresolvable part-ish reference.
+            has_unresolvable_ref = self._has_unresolvable_reference(lowered, context)
+            if has_unresolvable_ref:
+                # Emit NOOP so the cascade escalates; a dead LLM does nothing
+                # rather than clobbering the whole scene with the wrong modifier.
+                return op(op_type=OpType.NOOP, confidence=_HAZY_CONFIDENCE)
             return op(
                 op_type=OpType.MODIFY,
                 target_node_id=focus_node_id,
@@ -448,9 +566,15 @@ class RulesClassifier:
 
     @staticmethod
     def _find_definite_shape(text: str) -> ShapeKind | None:
-        """A shape referred to with a definite article: 'the (red) circle'."""
+        """A shape referred to with a definite/demonstrative article.
+
+        N1: accepts 'the', 'this', 'that', 'my', 'our' as definite determiners
+        so "turn this hexagon pink" and "make that circle red" correctly resolve
+        to MODIFY of an existing node rather than CREATEing a new one.
+        """
         for word, kind in _SHAPE_WORDS.items():
-            if re.search(rf"\bthe\s+(?:\w+\s+){{0,2}}?{re.escape(word)}\b", text):
+            pat = rf"\b(?:the|this|that|my|our)\s+(?:\w+\s+){{0,2}}?{re.escape(word)}\b"
+            if re.search(pat, text):
                 return kind
         return None
 
@@ -528,9 +652,9 @@ class RulesClassifier:
             if len(word) < 3:
                 continue
             if definite_only:
-                # Require "the" immediately before this word (allowing up to 2
-                # adjectives between them, matching _find_definite_shape style).
-                pattern = rf"\bthe\s+(?:\w+\s+){{0,2}}?{re.escape(word)}\b"
+                # N1: accept this/that/my/our as well as "the" for definite refs.
+                # Matches _find_definite_shape style (up to 2 adjectives between).
+                pattern = rf"\b(?:the|this|that|my|our)\s+(?:\w+\s+){{0,2}}?{re.escape(word)}\b"
                 if not re.search(pattern, text.lower()):
                     continue
             for c in candidates_with_labels:
@@ -538,6 +662,52 @@ class RulesClassifier:
                 if RulesClassifier._label_match(word, c.label):
                     best = c.node_id  # newest wins: keep overwriting
         return best
+
+    @staticmethod
+    def _has_unresolvable_reference(text: str, context: ClassifierContext) -> bool:
+        """Return True when the utterance contains a determiner followed by a word
+        that cannot be resolved to a candidate label or a shape/known word.
+
+        This is the N2 fallback-inversion guard: "the nose" when there is no
+        'nose' part or label means the user referenced something we cannot find.
+        Folding the modifier onto the whole scene would be wrong; better to NOOP
+        and let the LLM handle it (or do nothing on quota death).
+
+        Rule: a determiner (the/this/that/my/our/one) followed within 2 words by
+        an unexplained word (not in _KNOWN_WORDS, not a candidate label) counts as
+        an unresolvable reference.
+
+        "make it bigger" (no determiner before "bigger") → returns False.
+        "make the left eye bigger" (eye not in known words, preceded by "the") →
+        returns True when no part or label resolves it.
+        """
+        # Build the label-explained set.
+        label_expl = RulesClassifier._label_explained_words(text, context)
+
+        lowered = text.lower()
+        words = re.findall(r"[a-z]+", lowered)
+
+        # Determiners that can precede a reference.
+        determiners = frozenset({"the", "this", "that", "my", "our", "one"})
+
+        for i, word in enumerate(words):
+            if word not in determiners:
+                continue
+            # Look at the next 1-2 words after the determiner.
+            for offset in (1, 2):
+                j = i + offset
+                if j >= len(words):
+                    break
+                candidate = words[j]
+                if len(candidate) <= 2:
+                    continue
+                if candidate in _KNOWN_WORDS:
+                    continue
+                if candidate in label_expl:
+                    continue
+                # Found an unexplained word after a determiner → unresolvable ref.
+                return True
+        return False
 
     @staticmethod
     def _label_explained_words(text: str, context: ClassifierContext) -> frozenset[str]:
