@@ -123,3 +123,12 @@ def test_llm_user_payload_carries_reference_sketches() -> None:
 
     no_refs = json.loads(LLMClassifier._user_payload("something abstract", _CTX))
     assert no_refs["context"]["reference_sketches"] is None
+
+
+def test_template_parts_carry_stable_names() -> None:
+    """§13: every template part is addressable by name (auto part-1..n)."""
+    from quorum.pipeline.templates import _library
+
+    for name, spec in _library().items():
+        for i, part in enumerate(spec.parts):
+            assert part.name, f"{name} part {i} has no name"
