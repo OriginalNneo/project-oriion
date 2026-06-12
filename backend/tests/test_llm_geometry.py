@@ -101,3 +101,27 @@ async def test_llm_classifier_parses_intricate_payload_via_mock() -> None:
     assert op.op_type == OpType.CREATE
     assert op.source_stage == "llm"
     assert op.geometry is not None and op.geometry.kind is ShapeKind.PATH
+
+
+def test_payload_label_flows_to_op() -> None:
+    """R5 (plan.md §12 R3): a model-supplied label lands on the DesignOp."""
+    payload = _LLMPayload(op_type=OpType.CREATE, label="tabby cat")
+    op = payload_to_op(payload, speaker_id="a", utterance_id="u1", raw_text="a tabby cat")
+    assert op.label == "tabby cat"
+
+
+def test_create_without_label_falls_back_to_template_concept() -> None:
+    """CREATE with no model label takes the matched template name ("snowman")
+    so the node stays addressable ("make the snowman blue") — plan.md §12 R3."""
+    payload = _LLMPayload(op_type=OpType.CREATE)
+    op = payload_to_op(
+        payload, speaker_id="a", utterance_id="u1", raw_text="a snowman wearing a top hat"
+    )
+    assert op.label == "snowman"
+
+
+def test_modify_without_label_stays_none_for_inheritance() -> None:
+    """MODIFY leaves label None — the engine inherits the parent node's label."""
+    payload = _LLMPayload(op_type=OpType.MODIFY, target_node_id="n1")
+    op = payload_to_op(payload, speaker_id="a", utterance_id="u1", raw_text="make the cat orange")
+    assert op.label is None

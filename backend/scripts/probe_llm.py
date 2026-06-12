@@ -69,7 +69,9 @@ async def main(utterances: list[str]) -> list[tuple[Path, str]]:
         for n in diff.upserted:
             if n.svg is None:
                 continue
-            out = Path(f"/tmp/probe_{i}.svg")
+            # Node id in the name — a diff can upsert several nodes (the new
+            # iteration child AND its parent) and they must not collide.
+            out = Path(f"/tmp/probe_{i}_{n.id}.svg")
             svgs.append((out, n.svg))
             print(f"  node={n.id} -> {out}")
     return svgs
