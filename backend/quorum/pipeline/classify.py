@@ -88,6 +88,40 @@ _PREFERENCE_PHRASES: list[tuple[str, float]] = [
     ("dont like the", -0.6),
 ]
 
+# ---------------------------------------------------------------------------
+# U2 — Undo / go-back meta-command (plan.md §14).
+#
+# These phrases are checked BEFORE all content branches and are EXEMPT from
+# the hazy-confidence cap — the phrase IS the meaning; extra filler words
+# must not reduce confidence.
+#
+# Word-boundary regex: fires only on bare go-back intent, NOT on content uses
+# like "draw the back of the house" or "a clock going backwards".
+# Group 1 captures the matched verb/phrase so the guard can decide quickly.
+_UNDO_RE = re.compile(
+    r"""
+    \bundo\b                             # "undo"
+    | \bgo\s+back\b                      # "go back" (bare)
+    | \brevert\b                         # "revert"
+    | \bscratch\s+that\b                 # "scratch that"
+    | \bnever\s*mind\b                   # "never mind" / "nevermind"
+    | \bzoom\s+(?:back\s+)?out\b         # "zoom out" / "zoom back out"
+    | \b(?:go\s+back\s+to\s+the\s+)?
+      previous\s+(?:one|version|situation|step|state)\b
+                                         # "previous one/version/…"
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Phrases that ARE undo-like but contain a resolvable label/shape reference
+# ("go back to the cat") — the guard below checks for these so we can fall
+# through to existing FOCUS/label-resolution branches.  The guard fires only
+# when a definite reference word (after "to the …") matches a candidate node.
+_UNDO_TO_RE = re.compile(
+    r"\bgo\s+back\s+to\s+(?:the|this|that)\b",
+    re.IGNORECASE,
+)
+
 _BRANCH_HINTS = ("instead", "how about", "what about", "variant", "version", "or a", "another")
 _PRUNE_RE = re.compile(r"\b(remove|delete|scrap|discard|prune)\b|get rid of")
 _CONNECT_RE = re.compile(r"\b(connect|link|attach)\b")
@@ -120,6 +154,7 @@ _KNOWN_WORDS: frozenset[str] = frozenset(
     | set(_COLOR_WORDS)
     | {w for phrase, _ in _PREFERENCE_PHRASES for w in phrase.replace("'", " ").split()}
     | {"remove", "delete", "scrap", "discard", "prune", "connect", "link", "attach", "radius"}
+    | {"undo", "revert", "scratch", "nevermind", "previous", "situation", "step", "state", "zoom"}
     | set(NAMED_SHAPES)          # R4: named-shape words are known vocabulary
     | {w + "s" for w in NAMED_SHAPES}   # R4: plurals ("hexagons", "arrows", …)
     | {"some"}  # common quantifier often paired with shape words
@@ -212,6 +247,27 @@ class RulesClassifier:
                 raw_text=text,
                 **kwargs,
             )
+
+        # 0) U2 meta-command: undo / go-back — checked BEFORE all content
+        # branches and EXEMPT from the hazy-confidence cap. The phrase IS the
+        # meaning; extra filler words ("I don't really like it, never mind") must
+        # not reduce confidence.
+        #
+        # GUARD: if the utterance contains "go back to the <X>" where <X>
+        # resolves to a known label or shape, fall through so the existing
+        # FOCUS/label-resolution branches handle it ("go back to the cat" is a
+        # FOCUS, not an UNDO).
+        if _UNDO_RE.search(lowered):
+            # Run the guard: does this look like "go back to a specific node"?
+            is_directed = False
+            if _UNDO_TO_RE.search(lowered):
+                # Check whether a label or shape word after "to the" resolves.
+                if self._resolve_by_label(lowered, context) is not None:
+                    is_directed = True
+                elif self._resolve_named(self._find_shape(lowered), context) is not None:
+                    is_directed = True
+            if not is_directed:
+                return op(op_type=OpType.UNDO, confidence=0.9)
 
         # 1) preference signal -> FOCUS (positive) or disaffirm (negative). If
         # the utterance *names* a shape ("go with the triangle"), resolve it
