@@ -232,6 +232,17 @@ button:disabled {
   inset: 0;
   pointer-events: none;
 }
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.88);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .node-card {
   position: absolute;
   background: var(--card);
@@ -240,13 +251,16 @@ button:disabled {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Animate position when the mind-map reflows on a new iteration. */
   transition:
-    left 0.35s,
-    top 0.35s,
+    left 0.45s ease-out,
+    top 0.45s ease-out,
     transform 0.35s,
     box-shadow 0.35s,
     outline-color 0.35s;
   outline: 3px solid transparent;
+  /* Enter animation for newly mounted cards. */
+  animation: card-enter 0.3s ease-out both;
 }
 .node-card.focused {
   outline-color: var(--accent);
@@ -278,6 +292,20 @@ button:disabled {
 .chip.score {
   background: #fef3c7;
   color: #92400e;
+}
+/* Node label chip — concept name stamped by the classifier ("cuboid", "cat"). */
+.node-title {
+  font-size: 0.68rem;
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-align: center;
+  padding: 4px 10px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* muted separator below the chip, above the sketch */
+  border-bottom: 1px solid #e2e8f0;
 }
 
 /* ---------------- Display ---------------- */
