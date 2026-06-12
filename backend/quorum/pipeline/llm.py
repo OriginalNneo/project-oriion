@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field, ValidationError
 from quorum.config.settings import Backend, Settings
 from quorum.domain.geometry import GeometrySpec, ShapeKind
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
+from quorum.domain.parts import PartsPatch, apply_patch
 from quorum.observability import get_logger
 from quorum.pipeline.intent import has_3d_intent
 
@@ -63,7 +64,8 @@ Schema:
   "preference_signal": -1.0..1.0,
   "confidence": 0.0..1.0,
   "label": "<1-3 word name for the idea card, e.g. 'cat', 'coffee mug', or null>",
-  "geometry": <GeometrySpec or null>
+  "geometry": <GeometrySpec or null>,
+  "patch": {"set": [{"part": "<existing part name>", "<field>": <new value>, ...}], "add": [<complete new parts>], "remove": ["<part name>"]} or null
 }
 
 GeometrySpec — pick the SIMPLEST kind that expresses the intent:
@@ -88,9 +90,10 @@ Rules:
   * perpendicular: directions at 90° (dot product 0). parallel: equal directions, offset apart. concentric: identical center, different radii. inscribed: inner shape's rim touches the outer shape from inside. through the center / diameter: the segment passes through c.
   * angles ("at 45 degrees"): direction = (cos 45°, sin 45°) = (0.707, 0.707); remember y grows DOWNWARD, so "up at 45°" is (0.707, -0.707).
 - Resolve references like "the circle" or "the second one" against context.candidates and set target_node_id.
-- EXTENDING the current design ("add five thrusters", "give it a chimney", "put a hat on it"): emit op_type "modify" with target_node_id = context.focus_node_id and geometry = the COMPLETE new scene as a group. Copy EVERY existing part from context.focus_geometry BYTE-FOR-BYTE — same kind, same name, same x, same y, same width, same height, same points (every number must be identical). Only add new parts at the end. Never change any number of any existing part. Your geometry REPLACES the node's geometry entirely — omitting a part deletes it.
+- EDITING the current design — PREFER "patch" over "geometry". When the utterance changes, adds, or removes PARTS of context.focus_geometry, emit op_type "modify" with "patch" and leave "geometry" null. The system applies your delta to the stored scene (remove, then set, then add) — you never re-type the untouched parts, so nothing can drift. Rules: "set" entries name an EXISTING part (exact name from focus_geometry) plus ONLY the fields to change (never "kind"); "add" entries are complete parts with UNIQUE kebab-case role-position names ("eye-left", "wheel-2") placed correctly relative to the existing parts; "remove" lists part names to delete.
+- Re-emit a full "geometry" ONLY for restructures a patch cannot express (e.g. rearranging everything). If you do: copy EVERY surviving part from context.focus_geometry BYTE-FOR-BYTE — same kind, name, x, y, width, height, points — your geometry REPLACES the node's geometry entirely, and omitting a part deletes it.
 - PLACEMENT words are spatial commands, not decoration. "inside X" / "in it": the new part's box lies FULLY within the existing scene's box — center it there unless told otherwise — and comes AFTER the parts it sits in, so it paints on top. "on top of X": its bottom edge touches X's top edge. "on X" in a 3D scene: it sits on the visible top face. Never drop the new part outside the scene it extends.
-- RESTYLING the current design ("make it orange", "shade it into a tabby", "give it stripes"): op_type "modify" with target_node_id = context.focus_node_id; re-emit context.focus_geometry with IDENTICAL structure and coordinates — every kind, name, x, y, width, height, points, d byte-for-byte — changing ONLY stroke / fill / fill_style per part (and appending small detail parts like stripes AFTER the existing parts when the style demands them). Detail parts stay SMALL and well-placed: stripes/spots are SEVERAL thin shapes (each height <= 4) following the body's outline near its edges — never one big block, and never covering key features (eyes, face, screen). NEVER redraw, simplify, or flatten the object: a 3D object keeps exactly its shaded faces, just re-tinted; shading = the same hue in light/medium/dark variants per face.
+- RESTYLING the current design ("make it orange", "shade it into a tabby", "give it stripes"): op_type "modify" with a "patch" — "set" entries changing ONLY stroke / fill / fill_style per part, plus "add" entries for small detail parts (stripes) when the style demands them. Detail parts stay SMALL and well-placed: stripes/spots are SEVERAL thin shapes (each height <= 4) following the body's outline near its edges — never one big block, and never covering key features (eyes, face, screen). NEVER redraw, simplify, or flatten the object: a 3D object keeps exactly its shaded faces, just re-tinted; shading = the same hue in light/medium/dark variants per face.
 - Set "label" to a 1-3 word name for the idea ("cat", "coffee mug"). On modify you may refine it ("orange cat") or leave it null to inherit the existing name.
 - For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part. Parts ATTACH and OVERLAP — neighbouring parts' boxes share area or at least an edge (a snowman = three circles stacked and overlapping); never lay components out disjoint side-by-side — that is an exploded blueprint, not a sketch. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
 - context.reference_sketches: known-good geometry for concepts the utterance mentions, mined from real human drawings. When present, ADAPT the reference — reposition, rescale, recolor, combine with other parts — instead of inventing the concept from scratch. References are drawn full-canvas: shrink them when they are only one part of a larger scene.
@@ -116,6 +119,12 @@ Example F — "now draw a line tangent to it" while context.focus_geometry is {"
 
 Example G — "a coffee mug with steam, colored in" (CREATE; parts attach & overlap, painter's z-order: body first, the coffee surface painted ON TOP of the body's rim, handle overlapping the body's right edge, steam touching the rim):
 {"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.85,"geometry":{"kind":"group","x":50,"y":50,"width":60,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"rectangle","name":"body","x":46,"y":60,"width":28,"height":30,"corner_radius":2,"stroke":"#1f2937","fill":"#f3f4f6","fill_style":"solid","parts":[]},{"kind":"ellipse","name":"coffee","x":46,"y":45,"width":24,"height":6,"corner_radius":0,"stroke":"#1f2937","fill":"#92400e","fill_style":"solid","parts":[]},{"kind":"path","name":"handle","x":66,"y":60,"width":16,"height":24,"corner_radius":0,"stroke":"#1f2937","d":"M 58 50 C 74 48 74 72 58 70","parts":[]},{"kind":"path","name":"steam","x":43,"y":34,"width":10,"height":20,"corner_radius":0,"stroke":"#9ca3af","d":"M 42 44 C 38 38 48 32 44 24","parts":[]}]}}
+
+Example H — "add two eyes to it" while context.focus_geometry is a mouse group whose parts are named part-1..part-4 (head region around x 25-45, y 30-55). An ADD-only patch — the existing parts are never re-typed:
+{"op_type":"modify","target_shape":"group","target_node_id":"n1","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"label":null,"geometry":null,"patch":{"set":[],"add":[{"kind":"circle","name":"eye-left","x":31,"y":40,"width":4,"height":4,"corner_radius":0,"stroke":"#1f2937","fill":"#1f2937","fill_style":"solid","parts":[]},{"kind":"circle","name":"eye-right","x":40,"y":40,"width":4,"height":4,"corner_radius":0,"stroke":"#1f2937","fill":"#1f2937","fill_style":"solid","parts":[]}],"remove":[]}}
+
+Example I — "make the left eye bigger" while focus_geometry has parts eye-left and eye-right. A SET-only patch — two fields, nothing else emitted:
+{"op_type":"modify","target_shape":"group","target_node_id":"n2","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"label":null,"geometry":null,"patch":{"set":[{"part":"eye-left","width":7,"height":7}],"add":[],"remove":[]}}
 """
 
 
@@ -246,6 +255,18 @@ def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
     # Clamp geometry fields before validation
     if isinstance(data.get("geometry"), dict):
         _repair_geometry_dict(data["geometry"])
+    # The same clamp applies to a patch's added parts and set-merge fields
+    # (plan.md §13 N3) — out-of-range numbers get clamped, not rejected.
+    if isinstance(data.get("patch"), dict):
+        patch_raw = data["patch"]
+        if isinstance(patch_raw.get("add"), list):
+            for entry in patch_raw["add"]:
+                if isinstance(entry, dict):
+                    _repair_geometry_dict(entry)
+        if isinstance(patch_raw.get("set"), list):
+            for entry in patch_raw["set"]:
+                if isinstance(entry, dict):
+                    _repair_geometry_dict(entry)
 
     # First attempt: validate the full payload as-is (post-clamp)
     try:
@@ -280,6 +301,11 @@ class _LLMPayload(BaseModel):
     # means "inherit the node's existing label" (plan.md §12 R3).
     label: str | None = Field(default=None, max_length=40)
     geometry: GeometrySpec | None = None
+    # Scene-edit DELTA (plan.md §13 N3): set/add/remove against the focused
+    # scene's named parts. Preferred over re-emitting `geometry` for edits —
+    # research-verified to be far more reliable than verbatim re-serialization
+    # (the model emits only what changes; our code composes the new scene).
+    patch: PartsPatch | None = None
 
 
 def payload_to_op(
@@ -289,6 +315,7 @@ def payload_to_op(
     utterance_id: str,
     raw_text: str,
     focus_geometry: GeometrySpec | None = None,
+    focus_node_id: str | None = None,
 ) -> DesignOp:
     """Stamp a validated LLM payload with provenance to make a real DesignOp.
 
@@ -297,6 +324,12 @@ def payload_to_op(
     arithmetic is ours (a live tangent came back 7 units off — LLMs don't do
     math). `focus_geometry` tells the containment snap which parts already
     existed, so only the ADDED parts get moved inside.
+
+    A `patch` payload (plan.md §13) is composed against `focus_geometry` here
+    — model proposes the delta, code disposes the scene — so the engine still
+    receives a plain replacement geometry and replay is untouched. A patch
+    whose every clause was dropped by validation degrades to a no-geometry op
+    (the engine treats it as no change) rather than guessing.
     """
     from quorum.pipeline.relations import snap_relations
     from quorum.pipeline.templates import match
@@ -311,14 +344,31 @@ def payload_to_op(
         if hits:
             label = hits[0][0]
 
+    geometry = payload.geometry
+    target_node_id = payload.target_node_id
+    if payload.patch is not None:
+        if focus_geometry is None:
+            _log.warning("llm_patch_without_focus", utterance_id=utterance_id)
+        else:
+            patched, warnings = apply_patch(focus_geometry, payload.patch)
+            for w in warnings:
+                _log.warning("llm_patch_clause_dropped", reason=w, utterance_id=utterance_id)
+            if patched == focus_geometry:
+                geometry = None  # every clause dropped -> change nothing
+            else:
+                geometry = patched
+                # The patch was computed against the FOCUS scene; pointing the
+                # op anywhere else would graft this geometry onto the wrong node.
+                target_node_id = focus_node_id or payload.target_node_id
+
     return DesignOp(
         op_type=payload.op_type,
         target_shape=payload.target_shape,
-        target_node_id=payload.target_node_id,
+        target_node_id=target_node_id,
         relation_to_node=payload.relation_to_node,
         modifiers=payload.modifiers,
         preference_signal=payload.preference_signal,
-        geometry=snap_relations(raw_text, payload.geometry, focus_geometry=focus_geometry),
+        geometry=snap_relations(raw_text, geometry, focus_geometry=focus_geometry),
         label=label,
         speaker_id=speaker_id,
         utterance_id=utterance_id,
@@ -406,6 +456,7 @@ class LLMClassifier:
                 utterance_id=utterance_id,
                 raw_text=text,
                 focus_geometry=context.focus_geometry,
+                focus_node_id=context.focus_node_id,
             )
             _log.debug("llm_classified", op_type=str(op.op_type), confidence=op.confidence)
             return op

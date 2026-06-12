@@ -13,7 +13,7 @@ paying for a live call.
 from __future__ import annotations
 
 from quorum.config.settings import Backend
-from quorum.domain.geometry import ShapeKind
+from quorum.domain.geometry import GeometrySpec, ShapeKind
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
 from quorum.pipeline.llm import LLMClassifier, _LLMPayload, payload_to_op
 from quorum.pipeline.renderer import SvgRenderer
@@ -125,3 +125,73 @@ def test_modify_without_label_stays_none_for_inheritance() -> None:
     payload = _LLMPayload(op_type=OpType.MODIFY, target_node_id="n1")
     op = payload_to_op(payload, speaker_id="a", utterance_id="u1", raw_text="make the cat orange")
     assert op.label is None
+
+
+def _mouse_scene() -> GeometrySpec:
+    return GeometrySpec.model_validate(
+        {
+            "kind": "group",
+            "parts": [
+                {"kind": "circle", "name": "body", "x": 40, "y": 55, "width": 30, "height": 24},
+                {"kind": "circle", "name": "eye-left", "x": 31, "y": 40, "width": 4, "height": 4},
+                {"kind": "circle", "name": "eye-right", "x": 40, "y": 40, "width": 4, "height": 4},
+            ],
+        }
+    )
+
+
+def test_patch_payload_composes_scene_against_focus() -> None:
+    """§13 N3: the model emits only the delta; code composes the scene."""
+    from quorum.domain.parts import PartsPatch
+
+    payload = _LLMPayload(
+        op_type=OpType.MODIFY,
+        target_node_id="n9",  # patch was computed against the FOCUS — must be re-pointed
+        patch=PartsPatch(set=[{"part": "eye-left", "width": 7.0, "height": 7.0}]),
+    )
+    op = payload_to_op(
+        payload,
+        speaker_id="a",
+        utterance_id="u1",
+        raw_text="make the left eye bigger",
+        focus_geometry=_mouse_scene(),
+        focus_node_id="n2",
+    )
+    assert op.target_node_id == "n2"
+    assert op.geometry is not None
+    by_name = {p.name: p for p in op.geometry.parts}
+    assert by_name["eye-left"].width == 7.0 and by_name["eye-left"].height == 7.0
+    assert by_name["eye-right"].width == 4.0  # untouched sibling
+    assert by_name["body"].width == 30.0
+
+
+def test_patch_with_all_clauses_dropped_changes_nothing() -> None:
+    """A patch full of unknown part names degrades to a no-geometry op."""
+    from quorum.domain.parts import PartsPatch
+
+    payload = _LLMPayload(
+        op_type=OpType.MODIFY,
+        patch=PartsPatch(set=[{"part": "nose", "width": 9.0}], remove=["whiskers"]),
+    )
+    op = payload_to_op(
+        payload,
+        speaker_id="a",
+        utterance_id="u1",
+        raw_text="make the nose bigger",
+        focus_geometry=_mouse_scene(),
+        focus_node_id="n2",
+    )
+    assert op.geometry is None
+
+
+def test_patch_add_clamps_out_of_range_coords_via_repair() -> None:
+    """The clamp repair pass covers patch.add parts too."""
+    raw = (
+        '{"op_type":"modify","confidence":0.9,"patch":{"set":[],"remove":[],'
+        '"add":[{"kind":"circle","name":"hat","x":140,"y":-3,"width":8,"height":8}]}}'
+    )
+    from quorum.pipeline.llm import _parse_and_repair
+
+    payload = _parse_and_repair(raw)
+    assert payload is not None and payload.patch is not None
+    assert payload.patch.add[0].x == 100.0 and payload.patch.add[0].y == 0.0
