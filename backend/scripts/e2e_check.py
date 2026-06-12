@@ -16,7 +16,14 @@ drives a scripted participant through the wire protocol:
                                           NEW child node, parent intact,
                                           fills re-tinted red, coords
                                           byte-identical (§12 R1-R3)
-  8. a second client joins late        -> snapshot already holds the nodes
+  8. "a hexagon" then
+     "turn this hexagon pink" then
+     "make this hexagon three dimensional"
+                                        -> §13 chain, all rules-stage: label-
+                                           resolved recolor child, then a
+                                           deterministic cabinet-extruded
+                                           prism child in pink shades
+  9. a second client joins late        -> snapshot already holds the nodes
 
 Exits non-zero on any broken expectation. Run:
 
@@ -167,7 +174,39 @@ async def _drive() -> int:
                 "recolor: child coordinates byte-identical to the parent cuboid",
             )
 
-        # 8) late joiner sees state
+        # 8) §13 chain: hexagon -> demonstrative recolor -> deterministic 3D.
+        diff = await utter("a hexagon")
+        hexagon = diff["diff"]["upserted"][0]
+        check(
+            hexagon["geometry"]["kind"] == "polygon" and hexagon["label"] == "hexagon",
+            "§13: 'a hexagon' -> labelled polygon",
+        )
+        diff = await utter("turn this hexagon pink")
+        pink_id = diff["diff"]["focus_node_id"]
+        pink = {u["id"]: u for u in diff["diff"]["upserted"]}.get(pink_id)
+        check(
+            pink is not None
+            and pink["parent_ids"] == [hexagon["id"]]
+            and pink["geometry"]["stroke"] != hexagon["geometry"]["stroke"],
+            "§13: demonstrative 'this hexagon' -> recolor child of the hexagon",
+        )
+        diff = await utter("make this hexagon three dimensional")
+        prism_id = diff["diff"]["focus_node_id"]
+        prism = {u["id"]: u for u in diff["diff"]["upserted"]}.get(prism_id)
+        prism_parts = (prism or {}).get("geometry", {}).get("parts", [])
+        prism_names = {p.get("name") for p in prism_parts}
+        check(
+            prism is not None
+            and pink is not None
+            and prism["parent_ids"] == [pink["id"]]
+            and "face-front" in prism_names
+            and len(prism_parts) >= 3
+            and all(reddish(p.get("fill")) for p in prism_parts),
+            "§13: 'make this hexagon three dimensional' -> extruded prism child, "
+            "pink-hued shaded faces",
+        )
+
+        # 9) late joiner sees state
         async with websockets.connect(_URI) as ws2:
             await ws2.send(json.dumps({"type": "join", "room": "e2e",
                                        "speaker_id": "display", "role": "display"}))
