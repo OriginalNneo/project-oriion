@@ -62,6 +62,7 @@ Schema:
   "modifiers": ["fillet", "radius:8", "bigger", "smaller", "color:#dc2626"],
   "preference_signal": -1.0..1.0,
   "confidence": 0.0..1.0,
+  "label": "<1-3 word name for the idea card, e.g. 'cat', 'coffee mug', or null>",
   "geometry": <GeometrySpec or null>
 }
 
@@ -89,6 +90,8 @@ Rules:
 - Resolve references like "the circle" or "the second one" against context.candidates and set target_node_id.
 - EXTENDING the current design ("add five thrusters", "give it a chimney", "put a hat on it"): emit op_type "modify" with target_node_id = context.focus_node_id and geometry = the COMPLETE new scene as a group. Copy EVERY existing part from context.focus_geometry BYTE-FOR-BYTE — same kind, same name, same x, same y, same width, same height, same points (every number must be identical). Only add new parts at the end. Never change any number of any existing part. Your geometry REPLACES the node's geometry entirely — omitting a part deletes it.
 - PLACEMENT words are spatial commands, not decoration. "inside X" / "in it": the new part's box lies FULLY within the existing scene's box — center it there unless told otherwise — and comes AFTER the parts it sits in, so it paints on top. "on top of X": its bottom edge touches X's top edge. "on X" in a 3D scene: it sits on the visible top face. Never drop the new part outside the scene it extends.
+- RESTYLING the current design ("make it orange", "shade it into a tabby", "give it stripes"): op_type "modify" with target_node_id = context.focus_node_id; re-emit context.focus_geometry with IDENTICAL structure and coordinates — every kind, name, x, y, width, height, points, d byte-for-byte — changing ONLY stroke / fill / fill_style per part (and appending small detail parts like stripes AFTER the existing parts when the style demands them). Detail parts stay SMALL and well-placed: stripes/spots are SEVERAL thin shapes (each height <= 4) following the body's outline near its edges — never one big block, and never covering key features (eyes, face, screen). NEVER redraw, simplify, or flatten the object: a 3D object keeps exactly its shaded faces, just re-tinted; shading = the same hue in light/medium/dark variants per face.
+- Set "label" to a 1-3 word name for the idea ("cat", "coffee mug"). On modify you may refine it ("orange cat") or leave it null to inherit the existing name.
 - For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part. Parts ATTACH and OVERLAP — neighbouring parts' boxes share area or at least an edge (a snowman = three circles stacked and overlapping); never lay components out disjoint side-by-side — that is an exploded blueprint, not a sketch. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
 - context.reference_sketches: known-good geometry for concepts the utterance mentions, mined from real human drawings. When present, ADAPT the reference — reposition, rescale, recolor, combine with other parts — instead of inventing the concept from scratch. References are drawn full-canvas: shrink them when they are only one part of a larger scene.
 - Compose generously and use the RICH primitives — favor polygon/path/text over stacks of rectangles when they capture the shape better. Keep every coordinate inside 0..100 and the result visually coherent and centered.
@@ -273,6 +276,9 @@ class _LLMPayload(BaseModel):
     modifiers: list[str] = Field(default_factory=list)
     preference_signal: float = Field(default=0.0, ge=-1.0, le=1.0)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Concept name for the idea card ("cat", "coffee mug"); None on modify
+    # means "inherit the node's existing label" (plan.md §12 R3).
+    label: str | None = Field(default=None, max_length=40)
     geometry: GeometrySpec | None = None
 
 
@@ -293,6 +299,17 @@ def payload_to_op(
     existed, so only the ADDED parts get moved inside.
     """
     from quorum.pipeline.relations import snap_relations
+    from quorum.pipeline.templates import match
+
+    # Label fallback: a CREATE/BRANCH without a model-supplied label takes the
+    # matched template concept name ("a snowman" -> "snowman") so the node is
+    # still addressable by name later ("make the snowman blue"). MODIFY stays
+    # None so the engine inherits the parent node's label (plan.md §12 R3).
+    label = payload.label
+    if label is None and payload.op_type in (OpType.CREATE, OpType.BRANCH):
+        hits = match(raw_text, limit=1)
+        if hits:
+            label = hits[0][0]
 
     return DesignOp(
         op_type=payload.op_type,
@@ -302,6 +319,7 @@ def payload_to_op(
         modifiers=payload.modifiers,
         preference_signal=payload.preference_signal,
         geometry=snap_relations(raw_text, payload.geometry, focus_geometry=focus_geometry),
+        label=label,
         speaker_id=speaker_id,
         utterance_id=utterance_id,
         confidence=payload.confidence,
@@ -407,7 +425,11 @@ class LLMClassifier:
                 "context": {
                     "focus_node_id": context.focus_node_id,
                     "candidates": [
-                        {"node_id": c.node_id, "shape": str(c.shape) if c.shape else None}
+                        {
+                            "node_id": c.node_id,
+                            "shape": str(c.shape) if c.shape else None,
+                            "label": c.label,
+                        }
                         for c in context.candidates
                     ],
                     # The focused node's current scene, so "add five thrusters"
