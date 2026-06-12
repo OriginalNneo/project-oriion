@@ -27,6 +27,14 @@
 >   a mind-map view (history visible), and nameable geometric shapes
 >   (rhombus, parallelogram) must draw instantly instead of being skipped.
 >   All three diagnosed as codebase gaps, not model gaps.
+> - 2026-06-12 (later) — added §13 (Part-level editing & in-chain 3D
+>   conversion). Reason: §12 browser feedback — "make this hexagon 3D" and
+>   "make one eye bigger than the other" both fail. Probes traced five root
+>   causes (demonstratives unresolved, no deterministic extrusion, unnamed
+>   template parts, a dead-LLM fallback that scales the WHOLE scene on a
+>   part-scoped ask, quota-fragile LLM-only flows). Research (JSON Whisperer,
+>   SVGenius/SVGEditBench, aider diff benchmarks) backs an edit-as-PATCH
+>   contract over full scene re-emission.
 
 ---
 
@@ -518,3 +526,97 @@ node, same cuboid geometry, three red-shaded faces, focus on child, parent
 visible; "draw a cat" → template cat; "I want the cat to be orange" → child
 cat, orange strokes; "a rhombus" → exact polygon, 0 ms; mind map shows the
 chains radiating from the originals; all checks + latency budgets green.
+
+---
+
+## 13. Part-level editing & in-chain 3D conversion (2026-06-12)
+
+### The user intent (live §12 browser feedback)
+1. **In-chain kind conversion.** "Draw a hexagon" → "turn this hexagon pink"
+   → "make this hexagon three-dimensional" must extrude THE pink hexagon
+   into a 3D-looking prism, continuing the same mind-map chain.
+2. **Part-level nuance edits.** "Draw a mouse" → "add two eyes" → "make one
+   eye bigger than the other": humans iterate on tiny features; the system
+   must address, add, resize, and restyle individual PARTS of a scene.
+
+### Probe-verified diagnosis (context.md §3)
+(1) demonstratives ("this/that hexagon") aren't definite references → CREATE
+duplicates; (2) no deterministic 2D→3D path, and the dead-LLM fallback ships
+a flat duplicate; (3) template parts are unnamed → unaddressable; (4) the
+dead-LLM fallback folds part-scoped modifiers onto the WHOLE scene (probe:
+the whole mouse scaled); (5) Groq free-tier quota died mid-session — these
+flows must not be LLM-only.
+
+### Research verdict (2026-06-12 subagent; full citations in context.md)
+- **Edit-as-patch beats full re-emission** for small scene edits: JSON
+  Whisperer (EMNLP '25) — patch ≈ full quality at −31% tokens; SVGenius /
+  SVGEditBenchV2 — models pick the right edit TARGET reliably, they fail at
+  re-serializing everything else; aider's whole-file-vs-diff results flip in
+  favor of whole only when the whole file IS the target. Address parts **by
+  stable name, never index** (index arithmetic is the #1 patch failure).
+- **Resolve spatial qualifiers in CODE**: left/right = centroid x, top/
+  bottom = centroid y, biggest/smallest = bbox area, first/last = paint
+  order, widest/tallest. The LLM names the role ("eye"); geometry picks the
+  instance.
+- **Extrusion convention**: oblique cabinet — front face true-to-shape,
+  depth recedes 45° up-right at ~half scale; three visible faces, light
+  from top-left (top lightest, side darkest). A "true front face" is
+  precisely what 30° isometric cannot give, so cabinet is the deterministic
+  choice; shading reuses §12-R2's retint so the hue survives.
+
+### Design (segments)
+- **N1 — Reference grammar (classify):** demonstratives this/that/my/our
+  join "the" for definite shape AND label references; a determiner + a
+  shape/label word that resolves to an existing node + modifiers = MODIFY of
+  that node, never a named-shape CREATE. ("turn this hexagon pink" → recolor
+  child of the hexagon.)
+- **N2 — Part addressing (new `domain/parts.py` + classify):**
+  `resolve_parts(scene, phrase)` — role-token match on part names
+  (eye-left ↔ "left eye") + geometric qualifiers computed in code;
+  `apply_to_parts(scene, names, modifiers)` — modifier fold scoped to the
+  matched parts (size scales about the PART's center). Rules fast path:
+  modifiers + resolvable part reference → MODIFY with the patched scene,
+  conf 0.75, zero LLM. **Fallback inversion:** a part-ish reference that
+  does NOT resolve goes out as hazy NOOP (escalate; a dead LLM then does
+  NOTHING) — never fold part-scoped modifiers onto the whole scene.
+- **N3 — LLM patch contract (llm.py + domain/parts.py):** `PartsPatch`
+  {set: [{part, <fields>}], add: [GeometrySpec], remove: [names]}, applied
+  remove→set→add by `apply_patch` (pure). Validation per research: unknown
+  `set`/`remove` target → drop clause + log (corrective retry once); `add`
+  name collision → auto-suffix; `kind` change via set → stripped. The model
+  emits ONLY the delta; `payload_to_op` composes the full replacement
+  geometry so the engine/replay contract is untouched. Full re-emission
+  stays legal for restructures. Template strokes get auto-names
+  (`part-1..n`) at library load so every part is addressable. Prompt gains
+  PATCH rules + worked examples (add-eyes patch; one-eye-bigger set patch);
+  eyeball-gated.
+- **N4 — Deterministic extrusion (new `domain/extrude.py` + classify):**
+  `extrude(geom, depth≈9)` — silhouette (polygon verbatim; rect/ellipse/
+  named shapes polygonalized ≤20 pts) extruded along (+d, −d); visible
+  receding faces = silhouette edges whose outward normal faces the offset;
+  painter order: receding faces back-to-front, front face LAST; fills =
+  three lightness bands of the shape's own hue (retint); parts named
+  face-front / face-top-i / face-side-i. Routing: 3D-intent + focus
+  reference → MODIFY with extrude(focus_geometry) conf 0.8; 3D-intent + a
+  shape word + no focus reference → CREATE extrude(named/basic shape)
+  ("draw a 3D hexagon" instantly). Multi-part groups stay LLM territory in
+  v1 (documented).
+- **N5 — Integration:** e2e chain that runs WITHOUT the LLM: hexagon →
+  "turn this hexagon pink" → "make this hexagon three dimensional" →
+  n1→n2→n3 chain, n3 ≥3 faces in 3 pink shades. Mouse chain pinned with a
+  mocked LLM patch (live re-probe when Groq quota resets). Docs, decisions,
+  ledger, commits.
+
+### Capability verdict (API vs codebase)
+Still codebase. The patch contract makes part edits MORE reliable on the
+SAME small models (less to emit); extrusion and qualifier resolution are
+pure math. The quota incident strengthens the D4 case for a second/paid
+key — the user has offered to supply APIs; nothing here blocks on it.
+
+### Acceptance (live, end to end)
+"a hexagon" → "turn this hexagon pink" (recolor child, same chain) →
+"make this hexagon three dimensional" (extruded prism child, three pink
+shades, no LLM call); "a mouse" → "add two eyes" (patch-add, named
+eye-left/eye-right) → "make the left eye bigger" (rules fast path) and
+"make one eye bigger than the other" (LLM set-patch); all §12 behaviors
+unregressed; checks + latency green.

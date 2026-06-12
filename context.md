@@ -5,34 +5,34 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (+ **named-geometry tier**) → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, restyle, fills, exact-relation snapping, clamp/salvage/retry repair). **§12 Compositional iteration & mind-map canvas — ALL SIX SEGMENTS DONE, e2e ALL PASS, live-probed.** Checks green: ruff, mypy, **272 tests**, tsc, vite build. Next: human browser confirm of the mind map, then D3 (plan.md §11).
+> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration AND §13 part-level editing + in-chain 3D — DONE, e2e 16/16 ALL PASS, live-probed.** Checks green: ruff, mypy, **354 tests**, tsc, vite build. Next: human browser confirm, then D3 (plan.md §11).
 
 ---
 
 ## 1. One-line status
-**Voice MVP + compositional iteration shipped (plan.md §1.1 + §12): every
-modify now branches a NEW child node (mind-map history), "make the cube red"
-recolors the SAME isometric cuboid deterministically (shading preserved),
-"the cube"/"the cat" resolve by node label on the 0-ms fast path, 18 named
-geometric shapes (rhombus, parallelogram, …) draw instantly, the LLM restyle
-rule survives the eyeball gate (tabby cat keeps every path byte-identical),
-and the canvas is a radial mind map.** All checks green (ruff, mypy, **272
-backend tests**, tsc, vite build); fast path p95 0.122 ms e2e, LLM restyle
-~3.5-5.5 s live. Whole-program `e2e_check.py` ALL PASS incl. the §12
-acceptance chain. Next up: human browser confirm, then D3 — true 3D
-projection (plan.md §11).
+**Voice MVP + compositional iteration (§12) + part-level editing & in-chain
+3D conversion (§13) shipped.** Every modify branches a new mind-map child;
+recolors/restyles/extrusions/part edits are deterministic where they can be
+("a hexagon" → "turn this hexagon pink" → "make this hexagon three
+dimensional" runs entirely rules-stage at 0 ms, ending in a cabinet-extruded
+prism in three pink shades); the LLM edits scenes via a compact set/add/
+remove PATCH against named parts ("add two eyes to this mouse" = 1.2 s,
+originals byte-identical) and the rules layer handles part-scoped follow-ups
+("make one eye bigger than the other" = 0 ms, only that eye grows). All
+checks green (ruff, mypy, **354 backend tests**, tsc, vite build); fast path
+p95 0.178 ms; `e2e_check.py` 16/16 ALL PASS. Next: human browser confirm,
+then D3 — true 3D projection (plan.md §11).
 
 ## 2. Current focus
-**§12 Compositional iteration & mind-map canvas — DONE (2026-06-12), all
-six segments (see §3 entries):** R1 engine iteration-as-branch ✅ · R2
-deterministic recolor ✅ · R3 labels + label resolution ✅ · R4
-named-geometry tier ✅ · R5 restyle prompt rule (eyeball-gated, one
-refinement round) ✅ · R6 radial mind-map frontend ✅. Built by four parallel
-Sonnet subagents + main thread; integrated, full gate + live probes green.
-**Awaiting the one thing the agent can't do: a human browser pass** — speak
-"draw a cat" → "make the cat orange" → "shade it into a tabby" and "draw a
-cuboid" → "I want the cube to be red", watch the mind map grow outward
-(§4 item 1).
+**§13 Part-level editing & in-chain 3D conversion — DONE (2026-06-12), all
+segments (see §3):** N1 demonstrative references ✅ · N2 part addressing +
+part-scoped fast path + fallback inversion ✅ · N3 LLM patch contract +
+template part names ✅ · N4 deterministic cabinet extrusion ✅ · N5
+integration (e2e ALL PASS, live probes, two integration bugs caught & fixed:
+extrude winding flip, modifier double-fold) ✅. §12 (mind-map iteration,
+recolor, labels, named shapes, restyle, radial canvas) was DONE earlier the
+same day. **Awaiting the human browser pass** — the full confirm script is
+§4 item 0. Then back to plan.md §11 D3-D5.
 
 **Previous program (2026-06-11): Drawing Quality D1–D5 — D1/D2 done, D3–D5
 resume after the §12 browser confirm. Steps:**
@@ -103,6 +103,106 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **§13 INTEGRATION — ALL SEGMENTS DONE, e2e ALL PASS, live mouse + hexagon
+  chains verified, eyeball-gated (2026-06-12).** 354 tests, ruff+mypy clean,
+  fast path p95 0.178 ms (explained in §7). Two real bugs caught at the
+  integration gate — both classes now pinned by tests:
+  - **Extrude winding flip (eyeball gate caught it):** the agent's
+    trapezoid-form shoelace has the OPPOSITE sign of the cross-product form
+    its winding rule assumed — every outward normal flipped, the BACK edges
+    extruded, and the bands hid behind the front face (render: pink hexagon
+    with slivers — not 3D). One-line sign fix + a side-pinning regression
+    test (bands must protrude up-right beyond the front face for BOTH
+    windings) + the contiguity test made wraparound-aware (visible run
+    {5,0,1} is contiguous mod 6). Count-based asserts alone could NOT catch
+    a side flip — pin the SIDE.
+  - **Double-fold on part-scoped MODIFY (live probe caught it):** branch 6c
+    baked modifiers into op.geometry AND passed op.modifiers — the engine
+    folds modifiers onto replacement geometry, so "make one eye bigger"
+    grew the whole mouse ×1.3 and the eye ×1.69. Fix: emit modifiers=[]
+    when geometry is pre-baked. New classifier+engine INTEGRATION test
+    (op-level asserts could not see a downstream double-fold).
+  - **Live verifications (scout model — 70b daily quota exhausted):**
+    mouse → "add two eyes to this mouse" = LLM PATCH, 1.23 s (vs ~4-5 s
+    full re-emission), originals byte-identical, eye-left/eye-right added
+    on the head; → "make one eye bigger than the other" = rules 0.00 s,
+    ONLY eye-left grew; rendered PNG eyeballed ✓. Hexagon → pink →
+    three-dimensional: all three steps rules-stage 0.00 s, extruded prism
+    in three pink bands, eyeballed ✓. e2e_check.py extended with the §13
+    chain — 16/16 ALL PASS against a real server + live Groq.
+  - **Safety inversion verified live:** with the LLM 429-dead, "make one
+    eye bigger than the other" (no eyes yet) now does NOTHING (rules NOOP
+    0.5) — previously it scaled the whole mouse.
+  - **Ops:** backend/.env now pins QUORUM_GROQ_MODEL=llama-4-scout (per-
+    model quotas; 70b's daily allowance is spent — tiny pings pass, real
+    ~4k-token prompts 429). Code default stays 70b per the decisions log.
+    Server restarted on scout; healthz green.
+- **§13 N1/N2/N4 classifier routing — built (2026-06-12, Sonnet subagent;
+  14 new tests, zero regressions).** `classify.py`: demonstratives
+  this/that/my/our join "the" in definite shape AND label references
+  (branch 4 wins over named-shape CREATE — "turn this hexagon pink" is a
+  MODIFY now); new branch 6c part-scoped fast path (resolve_parts →
+  apply_to_parts, conf 0.75); branch 7 fallback INVERSION — a determiner
+  followed within 2 words by an unexplained unresolvable word = part-ish
+  reference we can't find → hazy NOOP (dead LLM does nothing) instead of
+  hazy whole-scene MODIFY; N4-A extrude routing (3D intent + target IS
+  focus → MODIFY with extrude(focus_geometry) conf 0.8; extrude None →
+  hazy as before); N4-B CREATE freebie ("a 3D hexagon" → extruded CREATE)
+  for NAMED_SHAPES only — basic shapes stay hazy 0.5 so "a 3D cube" still
+  hits the isometric TEMPLATE (D1 contract preserved).
+- **§13 N2-N4 domain + LLM layers — built (2026-06-12); classifier routing
+  in flight (superseded by the INTEGRATION entry above).** All checks green on a clean run: **338 tests** (the websocket
+  timeouts two parallel agents reported were suite-stacking, per the pinned
+  gotcha — single run passes).
+  - **`domain/parts.py`** (Sonnet subagent, 33 tests): `PartsPatch`
+    {set/add/remove}, `resolve_parts` (role-token match on part names +
+    geometric qualifiers in CODE: left/right/top/bottom/biggest/smallest/
+    widest/tallest/first/second/last; plural → all matches, bare singular →
+    first), `apply_to_parts` (modifier fold scoped to named parts, size
+    scales about the PART's center, color via §12 retint), `apply_patch`
+    (remove→set→add; 10 validation warnings incl. unknown-target drop,
+    kind-change strip, add-name auto-suffix, zero-parts guard, single-shape
+    wrap-as-group).
+  - **`domain/extrude.py`** (Sonnet subagent, 29 tests): oblique-cabinet
+    extrusion — silhouette (polygon verbatim / rect / renderer-exact
+    triangle / 16-gon circle+ellipse / single-part group) offset (k,-k),
+    k=0.7071·depth (default 9); fit-shrink about centroid to [2,98]; edge
+    visibility by winding-corrected outward normal · offset; band quads
+    far-first, face-front LAST; three lightness bands of the shape's OWN
+    hue (pink #db2777 → #ef9fc2/#de3a83/#a61c59). Unsupported kinds → None
+    (stays LLM territory).
+  - **`templates.py` `_name_parts`** (main thread): unnamed template strokes
+    get stable `part-1..n` names at load — every template part is now
+    addressable (was diagnosis root cause 3).
+  - **`llm.py` patch contract** (main thread, surgical): `_LLMPayload.patch:
+    PartsPatch`; prompt schema + "PREFER patch over geometry" edit rule
+    (EXTENDING rewritten: full re-emit is now the fallback for restructures
+    only), RESTYLING now patch-first, worked Examples H (add-eyes patch) and
+    I (one-eye-bigger set patch); clamp repair covers patch.add/patch.set;
+    `payload_to_op` composes the patch against focus_geometry (re-points
+    the target to the focus, logs dropped clauses, all-clauses-dropped →
+    no-geometry op = engine no-op). Engine/replay contract untouched.
+    Eyeball gate pending Groq quota reset.
+- **Live diagnosis: in-chain conversion + part-level edits (2026-06-12, user
+  browser feedback + agent probes) — input to plan.md §13.** User: "make
+  this hexagon 3D" fails; "make one eye bigger than the other" on a mouse
+  fails. Probed root causes (5):
+  1. **"turn THIS hexagon pink" → CREATE duplicate, not MODIFY** — definite-
+     reference detection only knows "the", not this/that/my; demonstrative
+     falls through to the named-shape CREATE branch (probe: n2 new pink
+     hexagon, chain broken).
+  2. **"make it 3D" has no deterministic path** — goes hazy→LLM (correct
+     routing), but kind-conversion by re-emission is the model's weakest
+     skill, and the dead-LLM fallback emits a FLAT duplicate.
+  3. **Template parts are UNNAMED** (QuickDraw strokes) — "the left eye" has
+     no handle to resolve against; only LLM-added parts carry names.
+  4. **Dead-LLM fallback on part-scoped edits is actively wrong**: "make the
+     left eye bigger than the right eye" → hazy bare-modifier MODIFY →
+     429 → fallback folded "bigger" onto the WHOLE mouse (probe: n2 = scaled
+     mouse). Wrong-everything beats wrong-nothing — must invert.
+  5. **Groq free tier exhausted mid-session** (429 incl. retry) — the
+     deterministic paths must carry these flows; LLM-only designs are
+     quota-fragile. (User offered to supply more APIs — relevant to D4.)
 - **§12 INTEGRATION — whole-program verified, live-probed, eyeball-gated
   (2026-06-12, main thread).** Full gate: ruff, mypy, **272 tests**, latency
   e2e p95 0.122 ms, tsc + vite build. `e2e_check.py` extended with the §12
@@ -620,12 +720,17 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
-0. **Browser live-confirm of §12 (the one thing the agent can't observe):**
-   human opens the Participant tab and speaks **"draw a cat" → "make the cat
-   orange" → "shade it into a tabby"** and **"draw a cuboid" → "I want the
-   cube to be red"**, plus "a rhombus" — confirm each iteration extends
-   OUTWARD as a new mind-map node (original stays), the recolors land on the
-   same shape, and the radial layout/animations feel right.
+0. **Browser live-confirm of §12 + §13 (the one thing the agent can't
+   observe):** Participant tab, speak:
+   - "draw a cat" → "make the cat orange" → "shade it into a tabby"
+   - "draw a cuboid" → "I want the cube to be red"
+   - "a hexagon" → "turn this hexagon pink" → "make this hexagon
+     three-dimensional" (should be instant — no LLM)
+   - "a mouse" → "add two eyes to this mouse" → "make one eye bigger than
+     the other" (eyes ~1-2 s; the eye edit instant)
+   Confirm each iteration extends OUTWARD as a new mind-map node, edits land
+   on the same shape, and the radial layout/animations feel right.
+   ⚠️ Server currently runs the scout model (70b daily quota spent today).
 1. **Resume point after that: Drawing Quality D3→D5** (D1/D2 done) — full
    steps in §2, design intent in plan.md §11. D3 = deterministic isometric
    projection (box/cylinder/wedge IR; renderer does the math).
@@ -699,6 +804,12 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-12 | Nodes carry a concept `label` (template name / shape word / LLM-supplied, with template-match fallback); "the cube"-style references resolve by label (exact → plural → 3-char stem, ≥4-char words); label-matched tokens count as EXPLAINED in the hazy calc | "I want the cube to be red" went hazy→LLM→flat redraw because resolution was ShapeKind-only and "cube" looked unexplained. Label resolution keeps appearance follow-ups on the 0-ms fast path. Watch: stem match can over-pair rare labels ("card"/"cart"); newest-wins bounds it |
 | 2026-06-12 | Named geometric shapes are CODE generators (`domain/shapes.py`, 18 words → exact polygons/paths) at rules conf 0.85, not templates and not LLM work | A rhombus is math, not taste — same reasoning as the computed isometric bank. Works in every backend config (template stage only exists when LLM is on) and composes with the modifier fold |
 | 2026-06-12 | LLM RESTYLE rule: appearance-only follow-ups re-emit `focus_geometry` byte-identical, changing only stroke/fill/fill_style; detail parts (stripes) = several thin shapes near edges, never blocks over features | First eyeball probe drew "stripes" as one brown block over the cat's eyes — the quality bar is structural preservation + unobtrusive detail. Color-only cases never reach the LLM at all (label resolution handles them) |
+| 2026-06-12 | Scene edits = **set/add/remove PATCH against named parts** (LLM emits only the delta; `apply_patch` composes; full re-emission demoted to restructures-only) | Research (JSON Whisperer '25, SVGenius/SVGEditBench, aider): models pick edit targets reliably but fail at verbatim re-serialization — our live copy-verbatim failures confirm it. Live result: add-eyes 1.2 s with originals byte-identical vs ~4-5 s re-emission. Parts addressed BY NAME only (index arithmetic is the #1 patch failure mode) |
+| 2026-06-12 | Spatial part qualifiers (left/right/top/bottom/biggest/widest/first/…) resolve in CODE from geometry; the LLM only ever names the role ("eye") | LLMs don't do arithmetic — same principle as tangency/recolor/extrusion. Singular ambiguous ("one eye") = first match, user corrects |
+| 2026-06-12 | Part-scoped fallback INVERSION: an unresolvable determiner+noun reference makes the bare-modifier fallback a hazy NOOP, never a whole-scene MODIFY | Live: dead-LLM fallback scaled the WHOLE mouse on "make the left eye bigger". Wrong-nothing beats wrong-everything |
+| 2026-06-12 | 2D→3D conversion = deterministic **oblique-cabinet extrusion** (front face true shape, 45° up-right half-scale depth, shading = three lightness bands of the shape's own hue) | A true front face is exactly what 30° isometric cannot give; extrusion is math, not taste. The isometric bank stays for canonical solids; extrude handles arbitrary silhouettes in-chain |
+| 2026-06-12 | MODIFY ops carrying pre-baked replacement geometry must emit `modifiers=[]` | The engine folds op.modifiers onto replacement geometry — passing both double-applies (live: whole mouse ×1.3 + eye ×1.69). Pinned by a classifier+engine INTEGRATION test; op-level asserts can't see downstream double-folds |
+| 2026-06-12 | Geometry tests must pin the SIDE/direction, not just counts (extrude regression test: bands protrude up-right for both windings) | The trapezoid-form shoelace has the opposite sign of the cross-product form — the winding flip extruded the BACK edges while every count-based assert stayed green; only the eyeball caught it |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -728,11 +839,11 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 |---|---|---|---|
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
-| Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/prune/connect/colors + §12 label resolution & named shapes |
-| Classify (LLM) | <1.5 s local / <0.8 s Groq | **~1.0 s / ~1.8 s** (Groq `llama-3.3-70b-versatile`, 6 intricate utterances); restyle ("tabby") **~3.5–5.5 s live** | ON. Only fires on rules-NOOP/hazy utterances; color-only follow-ups now NEVER reach it (label-resolved fast path). Restyle tail is heavy but rare — D4's tiered models are the lever |
+| Classify (fast) | <0.2 s | **0.05 ms / 0.09 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks |
+| Classify (LLM) | <1.5 s local / <0.8 s Groq | scene create ~1.0/1.8 s; **scene-edit PATCH ~1.2–1.5 s live** (scout); full restyle re-emission ~3.5–5.5 s | ON. Patch edits (add/set/remove parts) are ~3x faster than full re-emission — most §13 edits are patches; many follow-ups (recolor, part size, extrusion) never reach the LLM at all |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
-| Engine apply | (internal) | **0.04 ms / 0.05 ms** | DAG mutation + event append; §12 modify additionally creates + renders a child node |
-| **End-to-end (server fast path)** | **<5 s** | **0.085 ms / 0.122 ms** | classify+engine+render. ⚠️ p95 0.072→0.122 ms (+69%) is EXPLAINED, not a regression (RULES.md §6): §12-R1 makes every modify create + render a new child node by design; still ~40,000x under budget |
+| Engine apply | (internal) | **0.05 ms / 0.08 ms** | DAG mutation + event append; modify creates + renders a child node (§12) |
+| **End-to-end (server fast path)** | **<5 s** | **0.107 ms / 0.178 ms** | classify+engine+render. ⚠️ p95 0.122→0.178 ms (+46%) EXPLAINED (RULES.md §6): §13 adds part-reference resolution + extrusion routing to the fast path; still ~28,000x under budget |
 
 > Read-back: the server-side fast path stays ~4 orders of magnitude under the
 > 5 s budget. The real human-perceived latency now has two contributors: the
