@@ -34,6 +34,12 @@ recolor, labels, named shapes, restyle, radial canvas) was DONE earlier the
 same day. **Awaiting the human browser pass** — the full confirm script is
 §4 item 0. Then back to plan.md §11 D3-D5.
 
+**User browser verdict (2026-06-12 evening): "right now, it's really
+nice."** New feedback captured as §4 item -1 (voice undo / go-back,
+mind-map viewport UX — iterations land too far away, and a user-provided
+design reference to collect BEFORE any canvas redesign). That is the next
+session's starting point.
+
 **Previous program (2026-06-11): Drawing Quality D1–D5 — D1/D2 done, D3–D5
 resume after the §12 browser confirm. Steps:**
 1. [x] **Exact-relations segment — DONE & COMMITTED** (live re-probe passed
@@ -720,6 +726,27 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
+-1. **NEW user feedback (2026-06-12 evening, browser session) — input for
+   the NEXT program (likely plan.md §14). User's verdict on §12+§13: "right
+   now, it's really nice." Three asks:**
+   - **Voice undo / go-back:** "I don't really like... never mind, go back
+     to the previous situation" must revert to the previous node — focus
+     back to the parent iteration (and possibly fade/prune the abandoned
+     child). The event log + iteration-as-branch already make this cheap
+     (focus-move to parent; `from_events(events[:-k])` exists for hard
+     undo). "Zoom back out" was also said — may mean view-level zoom out,
+     clarify with the user.
+   - **Mind-map UX — iterations land too far away:** each new iteration is
+     drawn at the next ring (~270 px out), so the active sketch drifts off
+     screen and is hard to see. Candidates: auto-pan/zoom-to-follow-focus,
+     zoom-to-fit, tighter ring spacing for unforked chains. (R6's "deep
+     chains scroll horizontally" watch-item, now confirmed live by the
+     user.)
+   - **⚠️ The user has a mind-map DESIGN REFERENCE they wanted to show**
+     ("let me show you what I was thinking of when we view it in a mind
+     map") — the session ended before they could. **ASK FOR IT FIRST**
+     before redesigning the canvas; do not invent a layout the user
+     already has a picture of.
 0. **Browser live-confirm of §12 + §13 (the one thing the agent can't
    observe):** Participant tab, speak:
    - "draw a cat" → "make the cat orange" → "shade it into a tabby"
