@@ -75,6 +75,23 @@ _FILLER = frozenset(
 )
 
 
+def _name_parts(spec: GeometrySpec) -> GeometrySpec:
+    """Give unnamed parts stable names (part-1..n) so they are addressable.
+
+    Part-level edits (plan.md §13) target parts BY NAME; mined QuickDraw
+    strokes carry none, which made template sketches uneditable below the
+    whole-scene level. Names are assigned in paint order at load time so
+    they are stable across sessions.
+    """
+    if not spec.parts:
+        return spec
+    parts = [
+        p if p.name else p.model_copy(update={"name": f"part-{i + 1}"})
+        for i, p in enumerate(spec.parts)
+    ]
+    return spec.model_copy(update={"parts": parts})
+
+
 @lru_cache(maxsize=1)
 def _library() -> dict[str, GeometrySpec]:
     """All templates, merged across every JSON bank in the templates dir."""
@@ -82,7 +99,7 @@ def _library() -> dict[str, GeometrySpec]:
     for file in sorted(_TEMPLATES_DIR.glob("*.json")):
         raw = json.loads(file.read_text())
         for name, spec in raw["templates"].items():
-            lib[name] = GeometrySpec.model_validate(spec)
+            lib[name] = _name_parts(GeometrySpec.model_validate(spec))
     if not lib:
         _log.warning("templates_missing", path=str(_TEMPLATES_DIR))
     return lib
