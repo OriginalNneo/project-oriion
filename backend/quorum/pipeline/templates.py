@@ -156,6 +156,9 @@ class TemplateClassifier:
             op_type=OpType.CREATE,
             target_shape=ShapeKind.GROUP if spec.kind is ShapeKind.GROUP else spec.kind,
             geometry=spec.model_copy(deep=True),
+            # R3: stamp the canonical concept name so the engine can store it on
+            # the node and label-resolution ("the cube", "the cat") can work.
+            label=name,
             speaker_id=speaker_id,
             utterance_id=utterance_id,
             confidence=0.9,

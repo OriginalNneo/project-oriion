@@ -26,6 +26,7 @@ from quorum.config.settings import Backend
 from quorum.domain.geometry import GeometrySpec, ShapeKind, apply_modifiers
 from quorum.domain.messages import DemoOpMessage
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
+from quorum.domain.shapes import NAMED_SHAPES, named_shape
 from quorum.observability.latency import stage_timer
 from quorum.pipeline.intent import _3D_INTENT_RE
 from quorum.pipeline.interfaces import Classifier
@@ -110,6 +111,15 @@ _KNOWN_WORDS: frozenset[str] = frozenset(
     | set(_COLOR_WORDS)
     | {w for phrase, _ in _PREFERENCE_PHRASES for w in phrase.replace("'", " ").split()}
     | {"remove", "delete", "scrap", "discard", "prune", "connect", "link", "attach", "radius"}
+    | set(NAMED_SHAPES)          # R4: named-shape words are known vocabulary
+    | {w + "s" for w in NAMED_SHAPES}   # R4: plurals ("hexagons", "arrows", …)
+    | {"some"}  # common quantifier often paired with shape words
+)
+
+# Regex that matches any named-shape word (R4 named-geometry tier).
+_NAMED_SHAPE_WORDS = sorted(NAMED_SHAPES, key=len, reverse=True)
+_NAMED_SHAPE_RE = re.compile(
+    rf"\b({'|'.join(map(re.escape, _NAMED_SHAPE_WORDS))})\b"
 )
 # Confidence for a matched-but-hazy op: below the default escalation threshold
 # (0.55) so the cascade asks the LLM, yet non-zero so a dead LLM still falls
@@ -202,7 +212,12 @@ class RulesClassifier:
         for phrase, strength in _PREFERENCE_PHRASES:
             if phrase in lowered:
                 named = self._find_shape(lowered)
-                target = self._resolve_named(named, context) or focus_node_id
+                target = self._resolve_named(named, context)
+                # R3: also try label-based resolution ("go with the cat" when
+                # no rule-shape word matches but a node is labelled "cat").
+                if target is None:
+                    target = self._resolve_by_label(lowered, context)
+                target = target or focus_node_id
                 return op(
                     op_type=OpType.FOCUS,
                     target_node_id=target,
@@ -236,13 +251,18 @@ class RulesClassifier:
                 return op(op_type=OpType.PRUNE, target_node_id=target, confidence=0.8)
 
         modifiers = self._find_modifiers(lowered)
+        # R3: count tokens that are explained by candidate labels — they reduce
+        # the unexplained-word count so "i want the cube to be red" (where
+        # "cube" resolves a node labelled "cuboid") doesn't inflate hazy.
+        label_explained = self._label_explained_words(lowered, context)
         # ≥2 content words the rules can't express ("rocket … thrusters") means
         # a matched shape word is probably one PART of a richer intent; a single
         # geometric-relation word ("tangent", "perpendicular") means it outright.
         # Either way: emit the match below the cascade threshold so the LLM
         # stage handles it (and the rules op stays as the dead-LLM fallback).
+        unexplained = [w for w in self._unexplained_words(lowered) if w not in label_explained]
         hazy = (
-            len(self._unexplained_words(lowered)) >= 2
+            len(unexplained) >= 2
             or _RELATION_RE.search(lowered) is not None
             or _3D_INTENT_RE.search(lowered) is not None
             or (focus_node_id is not None and _EXTEND_RE.search(lowered) is not None)
@@ -251,9 +271,13 @@ class RulesClassifier:
         # 4) modify a *named existing* node ("make the circle bigger/red").
         # The definite article is the discriminator: "the circle" refers to an
         # existing node; "a circle" asks for a new one.
+        # R3: try ShapeKind resolution first; fall back to label resolution.
         if modifiers:
             named = self._find_definite_shape(lowered)
             target = self._resolve_named(named, context)
+            # R3 label fallback: "the cube" can match a node labelled "cuboid"
+            if target is None:
+                target = self._resolve_by_label(lowered, context, definite_only=True)
             if target is not None:
                 return op(
                     op_type=OpType.MODIFY,
@@ -283,14 +307,38 @@ class RulesClassifier:
         if shape is not None:
             is_branch = focus_node_id is not None and any(h in lowered for h in _BRANCH_HINTS)
             geom = apply_modifiers(GeometrySpec(kind=shape), modifiers)
+            # R3: stamp the matched spoken word as the label.
+            m = _SHAPE_RE.search(lowered)
+            shape_label = m.group(1) if m else None
             return op(
                 op_type=OpType.BRANCH if is_branch else OpType.CREATE,
                 target_shape=shape,
                 target_node_id=focus_node_id if is_branch else None,
                 modifiers=modifiers,
                 geometry=geom,
+                label=shape_label,
                 confidence=_HAZY_CONFIDENCE if hazy else 0.85,
             )
+
+        # 6b) R4 named-geometry tier: exact polygon/path generators for
+        # math-named shapes (rhombus, hexagon, star, etc.) that have no
+        # ShapeKind entry.  CREATE conf 0.85 (or hazy-capped as usual).
+        nm = _NAMED_SHAPE_RE.search(lowered)
+        if nm is not None:
+            word = nm.group(1)
+            spec = named_shape(word)
+            if spec is not None:
+                is_branch = focus_node_id is not None and any(h in lowered for h in _BRANCH_HINTS)
+                geom = apply_modifiers(spec, modifiers)
+                return op(
+                    op_type=OpType.BRANCH if is_branch else OpType.CREATE,
+                    target_shape=spec.kind,
+                    target_node_id=focus_node_id if is_branch else None,
+                    modifiers=modifiers,
+                    geometry=geom,
+                    label=word,
+                    confidence=_HAZY_CONFIDENCE if hazy else 0.85,
+                )
 
         # 7) bare modifier ("make it bigger") -> MODIFY the focus. A color word
         # inside a rich utterance ("a snowman with a red scarf") is NOT a bare
@@ -298,7 +346,8 @@ class RulesClassifier:
         # unexplained word ("add a red SPHERE") means the utterance asks for
         # more than a modifier fold can express — that too is LLM work.
         if modifiers and focus_node_id is not None:
-            hazy_modify = hazy or len(self._unexplained_words(lowered)) >= 1
+            extra = [w for w in self._unexplained_words(lowered) if w not in label_explained]
+            hazy_modify = hazy or len(extra) >= 1
             return op(
                 op_type=OpType.MODIFY,
                 target_node_id=focus_node_id,
@@ -425,6 +474,94 @@ class RulesClassifier:
                 mods.append(f"color:{hex_color}")
                 break
         return mods
+
+    @staticmethod
+    def _label_match(word: str, label: str) -> bool:
+        """Return True if *word* is a reasonable reference to *label*.
+
+        Match rules (R3):
+        - exact (case-insensitive)
+        - plural-s: word == label + "s"  or  label == word + "s"
+        - common-prefix ≥ 4 chars: "cube" ↔ "cuboid", "cat" ↔ "cats"
+        """
+        w, lab = word.lower(), label.lower()
+        if w == lab:
+            return True
+        if w == lab + "s" or lab == w + "s":
+            return True
+        # Common-stem prefix (plan.md §12 R3): if the reference word is ≥ 4 chars
+        # and the label is ≥ 4 chars, they are considered a match when they share
+        # a common leading stem of at least min(len(shorter), 4) - 1 = 3 chars.
+        # This deliberately catches "cube" ↔ "cuboid" (share "cub", 3 chars) while
+        # blocking short accidental matches like "box" ↔ "boxing" (< 4 chars).
+        if len(w) >= 4 and len(lab) >= 4:
+            stem = min(len(w), len(lab), 4) - 1  # 3 chars when either is 4 chars
+            if stem >= 3 and w[:stem] == lab[:stem]:
+                return True
+        return False
+
+    @staticmethod
+    def _resolve_by_label(
+        text: str,
+        context: ClassifierContext,
+        *,
+        definite_only: bool = False,
+    ) -> str | None:
+        """Resolve a word in *text* to a candidate node via its label.
+
+        When *definite_only* is True, only words preceded by a definite
+        article ("the") are considered — used for branch 4 (MODIFY) so
+        that "a hexagon" doesn't accidentally target an existing hexagon
+        node instead of creating a new one.
+
+        Newest candidate wins (last match in the list).
+        """
+        if not context.candidates:
+            return None
+        candidates_with_labels = [c for c in context.candidates if c.label]
+        if not candidates_with_labels:
+            return None
+
+        words = re.findall(r"[a-z]+", text.lower())
+        best: str | None = None
+        for word in words:
+            if len(word) < 3:
+                continue
+            if definite_only:
+                # Require "the" immediately before this word (allowing up to 2
+                # adjectives between them, matching _find_definite_shape style).
+                pattern = rf"\bthe\s+(?:\w+\s+){{0,2}}?{re.escape(word)}\b"
+                if not re.search(pattern, text.lower()):
+                    continue
+            for c in candidates_with_labels:
+                assert c.label is not None  # narrowed above
+                if RulesClassifier._label_match(word, c.label):
+                    best = c.node_id  # newest wins: keep overwriting
+        return best
+
+    @staticmethod
+    def _label_explained_words(text: str, context: ClassifierContext) -> frozenset[str]:
+        """Return tokens in *text* that are EXPLAINED by matching a candidate label.
+
+        These words are subtracted from the unexplained-word count before the
+        hazy threshold check, so "i want the cube to be red" (where "cube"
+        matches a node labelled "cuboid") doesn't inflate hazy.
+        """
+        if not context.candidates:
+            return frozenset()
+        candidates_with_labels = [c for c in context.candidates if c.label]
+        if not candidates_with_labels:
+            return frozenset()
+        explained: set[str] = set()
+        for word in re.findall(r"[a-z]+", text.lower()):
+            if len(word) < 3:
+                continue
+            for c in candidates_with_labels:
+                assert c.label is not None
+                if RulesClassifier._label_match(word, c.label):
+                    explained.add(word)
+                    break
+        return frozenset(explained)
 
 
 # Backwards-compatible alias: Phase 0 called the rules stage "MockClassifier";
