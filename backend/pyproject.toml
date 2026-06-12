@@ -35,6 +35,7 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.7",
     "mypy>=1.13",
+    "pytest-timeout>=2.4.0",
 ]
 
 [tool.uv]
@@ -74,6 +75,12 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# The TestClient double-websocket deadlock (main thread in portal cond-wait,
+# anyio loop thread in kevent) hangs the suite forever when it strikes.
+# timeout_method=thread dumps EVERY thread's Python stack at expiry — the
+# diagnostic we never got — and turns an infinite hang into a 30 s failure.
+timeout = 30
+timeout_method = "thread"
 markers = [
     "latency: latency benchmark tests (first-class — see RULES.md §3)",
     "integration: end-to-end loop tests",

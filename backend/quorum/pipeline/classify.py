@@ -131,6 +131,15 @@ _STACK_RE = re.compile(r"\bon top\b|\babove\b|\bover\b")
 _BELOW_RE = re.compile(r"\bbelow\b|\bunder(?:neath)?\b|\bbeneath\b")
 _INSIDE_RE = re.compile(r"\binside\b|\bwithin\b|\bin the (?:middle|center)\b")
 
+# Scene-extension intent ("add a red sphere inside"): an ADD verb or a
+# containment/placement word while a focus exists means "compose INTO the
+# current scene". Rules can only fold modifiers (branch 7) or open a separate
+# card (branch 6) — extension is LLM work, so such a match goes out hazy.
+_EXTEND_RE = re.compile(
+    r"\b(add|put|place|insert|attach|stick|mount|embed)\b"
+    r"|\b(inside|into|within|onto|on top of|in front of|behind)\b"
+)
+
 
 def demo_op_to_designop(msg: DemoOpMessage, utterance_id: str) -> DesignOp:
     """Phase 0: turn a hardcoded demo request into a real DesignOp."""
@@ -236,6 +245,7 @@ class RulesClassifier:
             len(self._unexplained_words(lowered)) >= 2
             or _RELATION_RE.search(lowered) is not None
             or _3D_INTENT_RE.search(lowered) is not None
+            or (focus_node_id is not None and _EXTEND_RE.search(lowered) is not None)
         )
 
         # 4) modify a *named existing* node ("make the circle bigger/red").
@@ -284,13 +294,16 @@ class RulesClassifier:
 
         # 7) bare modifier ("make it bigger") -> MODIFY the focus. A color word
         # inside a rich utterance ("a snowman with a red scarf") is NOT a bare
-        # modifier — the hazy cap sends those to the LLM stage.
+        # modifier — the hazy cap sends those to the LLM stage. Here even ONE
+        # unexplained word ("add a red SPHERE") means the utterance asks for
+        # more than a modifier fold can express — that too is LLM work.
         if modifiers and focus_node_id is not None:
+            hazy_modify = hazy or len(self._unexplained_words(lowered)) >= 1
             return op(
                 op_type=OpType.MODIFY,
                 target_node_id=focus_node_id,
                 modifiers=modifiers,
-                confidence=_HAZY_CONFIDENCE if hazy else 0.7,
+                confidence=_HAZY_CONFIDENCE if hazy_modify else 0.7,
             )
 
         # 8) nothing matched — low-confidence NOOP. The cascade escalates this

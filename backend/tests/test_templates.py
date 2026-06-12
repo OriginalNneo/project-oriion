@@ -52,6 +52,17 @@ async def test_3d_phrasing_is_a_direct_hit() -> None:
     assert op.geometry is not None and len(op.geometry.parts) == 3
 
 
+async def test_isometric_box_is_a_direct_hit() -> None:
+    """Live miss 2026-06-12: 'draw an isometric box' went to the LLM (1.6 s)
+    because only '3d box' was a cuboid synonym."""
+    op = await TemplateClassifier().classify(
+        "draw an isometric box", speaker_id="a", utterance_id="u1", context=_CTX
+    )
+    assert op.op_type is OpType.CREATE
+    assert op.source_stage == "template"
+    assert op.geometry is not None and len(op.geometry.parts) == 3
+
+
 def test_match_finds_named_concept_and_synonym() -> None:
     assert [m[0] for m in match("a snowman in the corner")] == ["snowman"]
     assert [m[0] for m in match("a smartphone")] == ["cell phone"]  # synonym
