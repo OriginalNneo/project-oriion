@@ -88,6 +88,7 @@ Rules:
   * angles ("at 45 degrees"): direction = (cos 45°, sin 45°) = (0.707, 0.707); remember y grows DOWNWARD, so "up at 45°" is (0.707, -0.707).
 - Resolve references like "the circle" or "the second one" against context.candidates and set target_node_id.
 - EXTENDING the current design ("add five thrusters", "give it a chimney", "put a hat on it"): emit op_type "modify" with target_node_id = context.focus_node_id and geometry = the COMPLETE new scene as a group. Copy EVERY existing part from context.focus_geometry BYTE-FOR-BYTE — same kind, same name, same x, same y, same width, same height, same points (every number must be identical). Only add new parts at the end. Never change any number of any existing part. Your geometry REPLACES the node's geometry entirely — omitting a part deletes it.
+- PLACEMENT words are spatial commands, not decoration. "inside X" / "in it": the new part's box lies FULLY within the existing scene's box — center it there unless told otherwise — and comes AFTER the parts it sits in, so it paints on top. "on top of X": its bottom edge touches X's top edge. "on X" in a 3D scene: it sits on the visible top face. Never drop the new part outside the scene it extends.
 - For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part. Parts ATTACH and OVERLAP — neighbouring parts' boxes share area or at least an edge (a snowman = three circles stacked and overlapping); never lay components out disjoint side-by-side — that is an exploded blueprint, not a sketch. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
 - context.reference_sketches: known-good geometry for concepts the utterance mentions, mined from real human drawings. When present, ADAPT the reference — reposition, rescale, recolor, combine with other parts — instead of inventing the concept from scratch. References are drawn full-canvas: shrink them when they are only one part of a larger scene.
 - Compose generously and use the RICH primitives — favor polygon/path/text over stacks of rectangles when they capture the shape better. Keep every coordinate inside 0..100 and the result visually coherent and centered.
@@ -276,13 +277,20 @@ class _LLMPayload(BaseModel):
 
 
 def payload_to_op(
-    payload: _LLMPayload, *, speaker_id: str, utterance_id: str, raw_text: str
+    payload: _LLMPayload,
+    *,
+    speaker_id: str,
+    utterance_id: str,
+    raw_text: str,
+    focus_geometry: GeometrySpec | None = None,
 ) -> DesignOp:
     """Stamp a validated LLM payload with provenance to make a real DesignOp.
 
-    Exact geometric relations the utterance names (tangency) are SNAPPED here:
-    the model supplies intent and rough placement; the arithmetic is ours
-    (a live tangent came back 7 units off — LLMs don't do math).
+    Exact geometric relations the utterance names (tangency, containment) are
+    SNAPPED here: the model supplies intent and rough placement; the
+    arithmetic is ours (a live tangent came back 7 units off — LLMs don't do
+    math). `focus_geometry` tells the containment snap which parts already
+    existed, so only the ADDED parts get moved inside.
     """
     from quorum.pipeline.relations import snap_relations
 
@@ -293,7 +301,7 @@ def payload_to_op(
         relation_to_node=payload.relation_to_node,
         modifiers=payload.modifiers,
         preference_signal=payload.preference_signal,
-        geometry=snap_relations(raw_text, payload.geometry),
+        geometry=snap_relations(raw_text, payload.geometry, focus_geometry=focus_geometry),
         speaker_id=speaker_id,
         utterance_id=utterance_id,
         confidence=payload.confidence,
@@ -375,7 +383,11 @@ class LLMClassifier:
                 return _noop(speaker_id=speaker_id, utterance_id=utterance_id, raw_text=text)
 
             op = payload_to_op(
-                payload, speaker_id=speaker_id, utterance_id=utterance_id, raw_text=text
+                payload,
+                speaker_id=speaker_id,
+                utterance_id=utterance_id,
+                raw_text=text,
+                focus_geometry=context.focus_geometry,
             )
             _log.debug("llm_classified", op_type=str(op.op_type), confidence=op.confidence)
             return op

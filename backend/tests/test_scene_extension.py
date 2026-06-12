@@ -116,6 +116,128 @@ async def test_relation_utterance_reaches_llm() -> None:
     assert op.source_stage == "llm"
 
 
+# --------------------------------------------------------------------------- #
+# 1b) extend-intent escalation: "add a red sphere inside" must reach the LLM  #
+# --------------------------------------------------------------------------- #
+_ISO_FACES = [
+    GeometrySpec(kind=ShapeKind.POLYGON, name="face-front", x=50, y=60, width=36,
+                 height=36, points=[[32.0, 42.0], [68.0, 42.0], [68.0, 78.0], [32.0, 78.0]]),
+    GeometrySpec(kind=ShapeKind.POLYGON, name="face-top", x=57, y=35, width=50,
+                 height=14, points=[[32.0, 42.0], [46.0, 28.0], [82.0, 28.0], [68.0, 42.0]]),
+    GeometrySpec(kind=ShapeKind.POLYGON, name="face-right", x=75, y=53, width=14,
+                 height=50, points=[[68.0, 42.0], [82.0, 28.0], [82.0, 64.0], [68.0, 78.0]]),
+]
+_FOCUS_CTX = ClassifierContext(
+    focus_node_id="n1",
+    focus_geometry=GeometrySpec(kind=ShapeKind.GROUP, parts=list(_ISO_FACES)),
+)
+
+
+async def _rules_focused(text: str) -> DesignOp:
+    return await RulesClassifier().classify(
+        text, speaker_id="a", utterance_id="u1", context=_FOCUS_CTX
+    )
+
+
+async def test_add_shape_with_focus_escalates() -> None:
+    """Live failure 2026-06-12: 'add a red sphere inside' (focused isometric
+    box) was hijacked by the bare-modifier MODIFY branch at 0.70 — the LLM,
+    the only stage that can compose INTO a scene, was never consulted."""
+    for text in (
+        "add a red sphere inside",
+        "add a red circle inside it",
+        "put a dot in the middle",
+        "add a circle",
+        "place a star on top of it",
+    ):
+        op = await _rules_focused(text)
+        assert op.confidence < 0.55, text
+
+
+async def test_plain_modifier_and_create_stay_fast() -> None:
+    op = await _rules_focused("make it bigger")
+    assert op.op_type == OpType.MODIFY and op.confidence == 0.7
+    # extending NOTHING is a plain create — no LLM tax without a focus
+    op = await _rules("add a circle")
+    assert op.op_type == OpType.CREATE and op.confidence == 0.85
+
+
+async def test_add_inside_reaches_llm() -> None:
+    llm = FakeLLM()
+    cascade = CascadeClassifier(RulesClassifier(), llm)
+    op = await cascade.classify(
+        "add a red sphere inside", speaker_id="a", utterance_id="u1", context=_FOCUS_CTX
+    )
+    assert llm.calls == 1
+    assert op.source_stage == "llm"
+
+
+# --------------------------------------------------------------------------- #
+# 1c) containment snap: parts added "inside" land inside the host scene       #
+# --------------------------------------------------------------------------- #
+def test_snap_inside_moves_added_part_into_host() -> None:
+    from quorum.pipeline.relations import snap_relations
+
+    sphere = GeometrySpec(kind=ShapeKind.CIRCLE, name="sphere", x=92, y=12,
+                          width=20, height=20, stroke="#b91c1c")
+    geom = GeometrySpec(kind=ShapeKind.GROUP, parts=[*_ISO_FACES, sphere])
+    snapped = snap_relations(
+        "add a red sphere inside", geom,
+        focus_geometry=_FOCUS_CTX.focus_geometry,
+    )
+    assert snapped is not None and snapped is not geom
+    moved = snapped.parts[-1]
+    # host union bbox of the three faces is (32,28)..(82,78) — center (57,53)
+    assert (moved.x, moved.y) == (57.0, 53.0)
+    assert moved.width == 20.0  # fits, so size untouched
+    # existing parts byte-identical
+    assert snapped.parts[:3] == _ISO_FACES
+
+
+def test_snap_inside_shrinks_oversized_part() -> None:
+    from quorum.pipeline.relations import snap_relations
+
+    slab = GeometrySpec(kind=ShapeKind.RECTANGLE, name="slab", x=50, y=90,
+                        width=90, height=90)
+    geom = GeometrySpec(kind=ShapeKind.GROUP, parts=[*_ISO_FACES, slab])
+    snapped = snap_relations("put a slab inside it", geom,
+                             focus_geometry=_FOCUS_CTX.focus_geometry)
+    assert snapped is not None
+    moved = snapped.parts[-1]
+    # host spans 50x50 -> oversized part shrinks to 80% of the smaller span
+    assert moved.width == 40.0 and moved.height == 40.0
+    assert (moved.x, moved.y) == (57.0, 53.0)
+
+
+def test_snap_inside_leaves_compliant_and_unrelated_alone() -> None:
+    from quorum.pipeline.relations import snap_relations
+
+    inside_already = GeometrySpec(kind=ShapeKind.CIRCLE, name="sphere", x=57, y=53,
+                                  width=10, height=10)
+    geom = GeometrySpec(kind=ShapeKind.GROUP, parts=[*_ISO_FACES, inside_already])
+    assert snap_relations("add a sphere inside", geom,
+                          focus_geometry=_FOCUS_CTX.focus_geometry) is geom
+    # no containment word -> untouched even when the part is outside
+    outside = GeometrySpec(kind=ShapeKind.CIRCLE, name="sphere", x=92, y=12,
+                           width=20, height=20)
+    geom2 = GeometrySpec(kind=ShapeKind.GROUP, parts=[*_ISO_FACES, outside])
+    assert snap_relations("add a sphere next to it", geom2,
+                          focus_geometry=_FOCUS_CTX.focus_geometry) is geom2
+
+
+def test_snap_inside_without_focus_treats_last_part_as_new() -> None:
+    from quorum.pipeline.relations import snap_relations
+
+    host = GeometrySpec(kind=ShapeKind.RECTANGLE, name="box", x=50, y=50,
+                        width=40, height=40)
+    dot = GeometrySpec(kind=ShapeKind.CIRCLE, name="dot", x=95, y=95,
+                       width=6, height=6)
+    geom = GeometrySpec(kind=ShapeKind.GROUP, parts=[host, dot])
+    snapped = snap_relations("a box with a dot inside", geom, focus_geometry=None)
+    assert snapped is not None
+    assert (snapped.parts[-1].x, snapped.parts[-1].y) == (50.0, 50.0)
+
+
 _TANGENT = """
 {"op_type":"modify","target_shape":"group","target_node_id":"n2","confidence":0.88,
  "geometry":{"kind":"group","x":50,"y":50,"width":80,"height":70,"stroke":"#1f2937","parts":[

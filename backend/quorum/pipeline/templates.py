@@ -55,6 +55,7 @@ _SYNONYMS: dict[str, str] = {
     "isometric cube": "cube",
     "3d box": "cuboid",
     "box in 3d": "cuboid",
+    "isometric box": "cuboid",
     "rectangular prism": "cuboid",
     "3d pyramid": "pyramid",
     "3d sphere": "sphere",

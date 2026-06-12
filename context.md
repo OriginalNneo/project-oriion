@@ -5,7 +5,7 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches, exact-relation snapping, **clamp/salvage/retry output repair**). Checks green: ruff, mypy, **154 tests**. **Active program:** Drawing Quality D1–D5 (plan.md §11) — **D1 done, D2 done, D3 next**.
+> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules → **template bank (345 mined + 8 exact isometric, ~0 ms hits)** → Groq LLM (scene extension, fills, reference-adapted sketches, exact-relation snapping, **clamp/salvage/retry output repair**). Checks green: ruff, mypy, **162 tests**. **Active program:** Drawing Quality D1–D5 (plan.md §11) — **D1 done, D2 done, D3 next**; live-test fix: compositional follow-ups ("add a red sphere inside") land INSIDE the scene.
 
 ---
 
@@ -93,6 +93,37 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Compositional follow-ups fixed — live-verified (2026-06-12 live test).**
+  User's live finding: "draw an isometric box" → "add a red sphere inside"
+  drew an EXTERNAL sphere. Root cause: rules branch 7 (bare-modifier MODIFY)
+  matched "red" at conf 0.70 — the LLM was never consulted; "sphere"/"add"/
+  "inside" left only 1 unexplained word, under the ≥2 hazy threshold. Fixed
+  in three layers (162 tests, ruff+mypy clean):
+  - **Detection** (`classify.py`): `_EXTEND_RE` (add/put/place/insert/attach/
+    stick/mount/embed + inside/into/within/onto/on top of/in front of/behind)
+    makes any rules match hazy when a focus exists — composing INTO a scene
+    is LLM work. Branch 7 additionally goes hazy on ≥1 unexplained word
+    ("add a red SPHERE"). "make it bigger" stays fast (0.7); "add a circle"
+    with no focus stays a fast CREATE (0.85).
+  - **Wording** (`llm.py` prompt): PLACEMENT rule — "inside X" = fully within
+    the scene's box, centered, listed AFTER so it paints on top; "on top of
+    X" = bottom edge touches X's top edge.
+  - **Enforcement** (`relations.py`): `_snap_all_inside` — new parts (names
+    not in `focus_geometry`; last part when no focus) that lie outside the
+    old parts' union box are centered into it, shrunk to 80% of the smaller
+    span only if oversized. Paths pass through. Same "model proposes, code
+    disposes" pattern as tangency; `payload_to_op` now takes
+    `focus_geometry` to tell old parts from new.
+  - **Template synonym**: "isometric box" → cuboid ("draw an isometric box"
+    is now a 0.02 s direct hit; it was going to the LLM at 1.6 s).
+  - **Live re-probe**: box = template hit with 3 shaded faces; "add a red
+    sphere inside" → MODIFY, faces byte-identical, red solid sphere centered
+    inside, painted on top. Rendered PNG eyeballed ✓.
+  - **Suite-hang diagnostic captured + guarded**: caught the real deadlock
+    live and sampled it — main thread in portal cond-wait, anyio loop thread
+    in kevent (TestClient double-websocket theory CONFIRMED at C level).
+    Added `pytest-timeout` (30 s, `timeout_method=thread`) so a future strike
+    fails in 30 s WITH per-thread Python stacks instead of hanging forever.
 - **D2 — prompt overhaul — DONE, eyeball-verified before/after (2026-06-12).**
   154 tests (was 148), ruff+mypy clean, fast path p95 0.084 ms (unchanged).
   **The subagent's first prompt rewrite FAILED the eyeball gate** — lesson
@@ -548,6 +579,9 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-12 | 3D escalation = explicit `_3D_INTENT_RE` in the hazy clause, not relaxing the `len(t) > 2` token filter | A targeted regex catches "3-d"/"three dimensional" variants the length filter never could, and doesn't risk flooding the coverage heuristic with short stopword-ish tokens |
 | 2026-06-12 | Prompt changes must pass the **eyeball gate**, and edits to a proven prompt are **additive/surgical, never rewrite-and-trim** | D2's first rewrite improved every scalar metric (parts/fills/overlap) while visibly regressing 3 of 10 renders — the metrics hid it. It had dropped proven content (signature-parts examples, orientation rule) and added a self-contradicting 3D rule + a flat "isometric" example. Numbers gate, eyes decide |
 | 2026-06-12 | Fused-points repair: split `[[3040]]` → `[[30,40]]` only when the digit split is UNIQUE (both halves 0..100, no leading zeros); otherwise leave for the validator | Live scout-17b drops the comma in coordinate pairs — the engine block was emitted every probe and silently dropped. Guessing ambiguous splits (150 → 1\|50 or 15\|0?) would corrupt geometry; refusing keeps repair trustworthy |
+| 2026-06-12 | Extend-intent escalation: ADD verbs/placement words with a focus make any rules match hazy; bare-modifier MODIFY (branch 7) goes hazy on even ONE unexplained word | Live test: "add a red sphere inside" was hijacked by the modifier-fold branch at 0.70 — composing INTO a scene is structurally beyond rules. "make it bigger" (0 unexplained, no extend words) keeps the fast path |
+| 2026-06-12 | Containment is snapped deterministically (`_snap_all_inside`): new parts outside the old parts' union box get centered into it (shrunk only if oversized); `payload_to_op` carries `focus_geometry` to tell old from new | Same model-proposes-code-disposes pattern as tangency: "inside" IS the meaning; the LLM supplies the part, the code guarantees the containment |
+| 2026-06-12 | Per-test `pytest-timeout` 30 s with `timeout_method=thread` | Finally sampled the live deadlock: main thread in TestClient portal cond-wait + anyio loop thread in kevent — confirmed at C level. A thread-method timeout converts the next infinite hang into a 30 s failure WITH every thread's Python stack (the missing diagnostic) |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
