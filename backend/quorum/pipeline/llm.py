@@ -65,7 +65,8 @@ Schema:
   "confidence": 0.0..1.0,
   "label": "<1-3 word name for the idea card, e.g. 'cat', 'coffee mug', or null>",
   "geometry": <GeometrySpec or null>,
-  "patch": {"set": [{"part": "<existing part name>", "<field>": <new value>, ...}], "add": [<complete new parts>], "remove": ["<part name>"]} or null
+  "patch": {"set": [{"part": "<existing part name>", "<field>": <new value>, ...}], "add": [<complete new parts>], "remove": ["<part name>"]} or null,
+  "solids": [{"shape": "box|cylinder|wedge", "x": 0..100, "y": 0..100, "z": 0..100, "w": >0, "d": >0, "h": >0, "color": "#rrggbb or null", "name": "<part name>"}] or null
 }
 
 GeometrySpec — pick the SIMPLEST kind that expresses the intent:
@@ -84,7 +85,8 @@ Rules:
 - "create" for a new idea; "branch" when it's a variant of the current focus; "modify" to change an existing node (set target_node_id from context); "focus" for preferences (preference_signal: "let's go with"≈1, "maybe"≈0.3, rejection negative); "prune" to remove; "connect" to link two existing nodes; "noop" if it is not a design intent.
 - create vs modify: a NEW standalone object ("a cube", "a smartphone", "a 3D engine", "a bicycle") is ALWAYS "create" — even when a focus exists. Only pick "modify" when the words explicitly refer back to the current design using words like "add ...", "give it ...", "put a ... on it", "make it ...", "now ... to it". When in doubt, CREATE — replacing someone's idea is worse than adding a new card.
 - COLOR: "stroke" is the outline; "fill" colors the body. When the speaker asks for color ("a red scarf", "colored in", "fill it in green"), set BOTH per part: fill = the color, fill_style = "solid" (or "hachure" for a sketchy fill), and keep the stroke a darker tone of it. No color mentioned → stroke #1f2937, fill null.
-- 3D look ("a 3D X", "isometric X"): draw the 2-3 VISIBLE faces as separate polygons sharing edges — front face, then top and side as parallelograms offset up-right (Example E). Never draw hidden faces and never stack axis-aligned rectangles for 3D. Fills ON, three shades sell the depth: light top (#e5e7eb), medium front (#9ca3af), dark side (#6b7280). For a 3D assembly ("a 3D engine"), every component gets its faces and components OVERLAP into one connected body.
+- TRUE 3D — PREFER "solids" for anything volumetric ("a 3D box/cube", "a cylinder", "an isometric engine", "a wedge/ramp", any solid or assembly of solids). Emit op_type "create" (or "modify" to rebuild the focus as 3D), set "geometry" and "patch" to null, and give a "solids" list. Each solid is an axis-aligned block placed in a RELATIVE 3D space — x→right, y→UP, z→toward you (depth); (x,y,z) is its near-bottom-left corner and (w,d,h) its size along x / z / y. ONLY relative position and size matter: the system does the exact 30° isometric projection, face shading (light top, medium front, dark side), hidden-face removal and depth-sorting, then centers and scales the whole result. Build an assembly by OVERLAPPING and stacking solids into one connected body (a piston engine = one wide block box with cylinders sitting on its top face, example J). Give each solid its own "color" and a "name". Do NOT compute faces or projection yourself when you use solids — that is the system's job.
+- 3D by hand (only when "solids" can't express it — a single tilted panel, a wireframe): draw the 2-3 VISIBLE faces as polygons sharing edges, offset up-right (Example E); never draw hidden faces or stack axis-aligned rectangles. Fills ON, three shades: light top (#e5e7eb), medium front (#9ca3af), dark side (#6b7280). For real solids/assemblies prefer "solids" above — its projection is exact.
 - GEOMETRIC RELATIONS are exact — compute the numbers, never just place shapes near each other:
   * tangent to a circle (center c, radius r): pick a touch point T = c + r*(cos a, sin a); the line passes through T perpendicular to the radius, i.e. along (-sin a, cos a). Endpoints = T ± L*(-sin a, cos a). The line's distance from c must equal r exactly — it touches at ONE point and never crosses the rim.
   * perpendicular: directions at 90° (dot product 0). parallel: equal directions, offset apart. concentric: identical center, different radii. inscribed: inner shape's rim touches the outer shape from inside. through the center / diameter: the segment passes through c.
@@ -111,7 +113,7 @@ Example C — "a heart" (smooth path, absolute uppercase commands):
 Example D — "now add five thrusters" while context.focus_node_id="n3" and context.focus_geometry is a group whose parts contain {"kind":"polygon","name":"funnel-body","points":[[12,28],[12,72],[58,56],[86,52],[86,48],[58,44]],...} (a funnel on its side). Copy the funnel part verbatim, append the thrusters, op is modify:
 {"op_type":"modify","target_shape":"group","target_node_id":"n3","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.85,"geometry":{"kind":"group","x":50,"y":50,"width":90,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"polygon","name":"funnel-body","x":50,"y":50,"width":74,"height":44,"corner_radius":0,"stroke":"#1f2937","points":[[12,28],[12,72],[58,56],[86,52],[86,48],[58,44]],"parts":[]},{"kind":"rectangle","name":"thruster-1","x":7,"y":32,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-2","x":7,"y":41,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-3","x":7,"y":50,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-4","x":7,"y":59,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-5","x":7,"y":68,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]}]}}
 
-Example E — "a 3D cube" (CREATE a new idea even though a focus exists; isometric = 3 visible faces, fill shading sells the depth):
+Example E — "a 3D cube" drawn BY HAND (FALLBACK ONLY — for a real solid like a cube PREFER "solids" / Example J; this polygon-face form is for tilted panels or wireframes that "solids" cannot express). CREATE a new idea even though a focus exists; isometric = 3 visible faces, fill shading sells the depth:
 {"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"geometry":{"kind":"group","x":50,"y":50,"width":60,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"polygon","name":"face-front","x":50,"y":60,"width":36,"height":36,"corner_radius":0,"stroke":"#1f2937","fill":"#9ca3af","fill_style":"solid","points":[[32,42],[68,42],[68,78],[32,78]],"parts":[]},{"kind":"polygon","name":"face-top","x":57,"y":35,"width":50,"height":14,"corner_radius":0,"stroke":"#1f2937","fill":"#e5e7eb","fill_style":"solid","points":[[32,42],[46,28],[82,28],[68,42]],"parts":[]},{"kind":"polygon","name":"face-right","x":75,"y":53,"width":14,"height":50,"corner_radius":0,"stroke":"#1f2937","fill":"#6b7280","fill_style":"solid","points":[[68,42],[82,28],[82,64],[68,78]],"parts":[]}]}}
 
 Example F — "now draw a line tangent to it" while context.focus_geometry is {"kind":"circle","name":"circle","x":40,"y":55,"width":44,"height":44} (center (40,55), r=22). Touch point at angle -45°: T = (40+22*0.707, 55-22*0.707) = (55.6,39.4); the tangent runs along (0.707,0.707), endpoints T ± 28 in that direction. Distance from (40,55) to the line = 22 = r, exactly:
@@ -125,6 +127,9 @@ Example H — "add two eyes to it" while context.focus_geometry is a mouse group
 
 Example I — "make the left eye bigger" while focus_geometry has parts eye-left and eye-right. A SET-only patch — two fields, nothing else emitted:
 {"op_type":"modify","target_shape":"group","target_node_id":"n2","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"label":null,"geometry":null,"patch":{"set":[{"part":"eye-left","width":7,"height":7}],"add":[],"remove":[]}}
+
+Example J — "a 3D engine with three pistons" (TRUE 3D via solids — you only place axis-aligned blocks in relative space, overlapping into one body; the system projects, shades, hides back faces, depth-sorts, and fits the result. The block is y=0..22; the pistons sit on its top face at y=22):
+{"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"label":"engine","geometry":null,"patch":null,"solids":[{"shape":"box","x":8,"y":0,"z":10,"w":64,"d":34,"h":22,"color":"#6b7280","name":"block"},{"shape":"cylinder","x":16,"y":22,"z":20,"w":12,"d":12,"h":20,"color":"#9ca3af","name":"piston-1"},{"shape":"cylinder","x":34,"y":22,"z":20,"w":12,"d":12,"h":20,"color":"#9ca3af","name":"piston-2"},{"shape":"cylinder","x":52,"y":22,"z":20,"w":12,"d":12,"h":20,"color":"#9ca3af","name":"piston-3"}]}
 """
 
 
@@ -268,6 +273,20 @@ def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
                 if isinstance(entry, dict):
                     _repair_geometry_dict(entry)
 
+    # Solids (plan.md §11 D3): clamp placement into 0..100 and sizes positive
+    # before validation — repair, not reject. project_solids fits the assembly
+    # to the box afterward, so loose numbers still produce a valid drawing.
+    if isinstance(data.get("solids"), list):
+        for solid in data["solids"]:
+            if not isinstance(solid, dict):
+                continue
+            for key in ("x", "y", "z"):
+                if isinstance(solid.get(key), (int, float)):
+                    solid[key] = _clamp(float(solid[key]), 0.0, 100.0)
+            for key in ("w", "d", "h"):
+                if isinstance(solid.get(key), (int, float)):
+                    solid[key] = _clamp(float(solid[key]), 0.001, 100.0)
+
     # First attempt: validate the full payload as-is (post-clamp)
     try:
         return _LLMPayload.model_validate(data)
@@ -285,6 +304,25 @@ def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
                 pass
 
     return None
+
+
+class _SolidSpec(BaseModel):
+    """One axis-aligned 3D solid the model places in a RELATIVE world space
+    (plan.md §11 D3). The model only supplies rough placement/size; the code
+    (``domain/isometric.project_solids``) does ALL projection, shading,
+    hidden-face removal, depth-sorting and fitting — "model proposes, code
+    disposes", the same pattern as tangency/recolor/extrusion. Out-of-range
+    numbers are clamped before validation (see ``_repair_geometry_dict``)."""
+
+    shape: str = "box"
+    x: float = Field(default=0.0, ge=0, le=100)
+    y: float = Field(default=0.0, ge=0, le=100)
+    z: float = Field(default=0.0, ge=0, le=100)
+    w: float = Field(default=20.0, gt=0, le=100)
+    d: float = Field(default=20.0, gt=0, le=100)
+    h: float = Field(default=20.0, gt=0, le=100)
+    color: str | None = None
+    name: str | None = Field(default=None, max_length=40)
 
 
 class _LLMPayload(BaseModel):
@@ -306,6 +344,11 @@ class _LLMPayload(BaseModel):
     # research-verified to be far more reliable than verbatim re-serialization
     # (the model emits only what changes; our code composes the new scene).
     patch: PartsPatch | None = None
+    # TRUE 3D (plan.md §11 D3): axis-aligned solids the code projects to an
+    # exact isometric GROUP. Transient — never stored; projected in
+    # `payload_to_op` before the op leaves this stage, so the engine/replay and
+    # both renderers only ever see the resulting flat polygon/path GROUP.
+    solids: list[_SolidSpec] | None = None
 
 
 def payload_to_op(
@@ -346,6 +389,9 @@ def payload_to_op(
 
     geometry = payload.geometry
     target_node_id = payload.target_node_id
+    # Projected 3D is already exact — it must NOT pass through snap_relations,
+    # whose `inside`/`within` snap would yank a cylinder cap into the body.
+    from_solids = False
     if payload.patch is not None:
         if focus_geometry is None:
             _log.warning("llm_patch_without_focus", utterance_id=utterance_id)
@@ -360,6 +406,43 @@ def payload_to_op(
                 # The patch was computed against the FOCUS scene; pointing the
                 # op anywhere else would graft this geometry onto the wrong node.
                 target_node_id = focus_node_id or payload.target_node_id
+    elif payload.solids:
+        # TRUE 3D (plan.md §11 D3): the model placed axis-aligned solids in
+        # relative space; WE do the exact 30° isometric projection, shading,
+        # hidden-face removal, depth-sort and fit. The engine and both
+        # renderers only ever see the resulting flat polygon/path GROUP, so
+        # replay and the wire contract are untouched.
+        from quorum.domain.isometric import Solid, project_solids
+
+        if payload.geometry is not None:
+            # The prompt says emit geometry=null with solids; if the model sent
+            # both, the projection wins — log it so the discard is traceable.
+            _log.warning("llm_solids_overrides_geometry", utterance_id=utterance_id)
+        projected = project_solids(
+            [
+                Solid(
+                    shape=s.shape,
+                    x=s.x,
+                    y=s.y,
+                    z=s.z,
+                    w=s.w,
+                    d=s.d,
+                    h=s.h,
+                    color=s.color,
+                    name=s.name,
+                )
+                for s in payload.solids
+            ]
+        )
+        if projected is not None:
+            geometry = projected
+            from_solids = True
+            # On a MODIFY the projection replaces the whole scene; aim it at the
+            # FOCUSED node (mirror the patch branch) so a hallucinated
+            # target_node_id can't graft the 3D body onto the wrong card. A
+            # CREATE keeps target_node_id None (it's a new idea).
+            if payload.op_type is OpType.MODIFY:
+                target_node_id = focus_node_id or payload.target_node_id
 
     return DesignOp(
         op_type=payload.op_type,
@@ -368,7 +451,11 @@ def payload_to_op(
         relation_to_node=payload.relation_to_node,
         modifiers=payload.modifiers,
         preference_signal=payload.preference_signal,
-        geometry=snap_relations(raw_text, geometry, focus_geometry=focus_geometry),
+        geometry=(
+            geometry
+            if from_solids
+            else snap_relations(raw_text, geometry, focus_geometry=focus_geometry)
+        ),
         label=label,
         speaker_id=speaker_id,
         utterance_id=utterance_id,
