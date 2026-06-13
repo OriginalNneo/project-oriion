@@ -21,6 +21,7 @@ class Backend(StrEnum):
     MOCK = "mock"
     LOCAL = "local"
     GROQ = "groq"
+    OPENROUTER = "openrouter"
 
 
 class Settings(BaseSettings):
@@ -58,6 +59,10 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "llama-3.1-8b-instant"
 
+    # --- Cloud creds (only required when a backend is OPENROUTER) ---
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "inclusionai/ling-2.6-flash"
+
     # --- Server ---
     host: str = "0.0.0.0"
     port: int = 8000
@@ -69,6 +74,14 @@ class Settings(BaseSettings):
         if not self.groq_api_key:
             raise RuntimeError("QUORUM_GROQ_API_KEY is required when a backend is set to 'groq'.")
         return self.groq_api_key
+
+    def require_openrouter_key(self) -> str:
+        """Return the OpenRouter key or fail loudly — better than a silent 401 later."""
+        if not self.openrouter_api_key:
+            raise RuntimeError(
+                "QUORUM_OPENROUTER_API_KEY is required when a backend is set to 'openrouter'."
+            )
+        return self.openrouter_api_key
 
 
 @lru_cache(maxsize=1)

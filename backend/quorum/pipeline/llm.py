@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -351,6 +351,21 @@ class _LLMPayload(BaseModel):
     solids: list[_SolidSpec] | None = None
 
 
+def _payload_kind(payload: _LLMPayload) -> str:
+    """Which output channel the model used — for the D4 adherence diagnostic.
+
+    Precedence mirrors ``payload_to_op``: solids project to a 3D group, else a
+    patch composes against the focus, else a full geometry, else nothing.
+    """
+    if payload.solids:
+        return "solids"
+    if payload.patch is not None:
+        return "patch"
+    if payload.geometry is not None:
+        return "geometry"
+    return "none"
+
+
 def payload_to_op(
     payload: _LLMPayload,
     *,
@@ -489,12 +504,19 @@ class LLMClassifier:
         api_key: str | None = None,
         ollama_url: str = "http://localhost:11434",
         timeout_s: float = 8.0,
+        record_diagnostics: bool = False,
     ) -> None:
         self._backend = backend
         self._model = model
         self._api_key = api_key
         self._ollama_url = ollama_url.rstrip("/")
         self._timeout = timeout_s
+        # Opt-in eval hook (plan.md §11 D4): when True, `classify` records the
+        # shape of each raw payload ("solids"/"patch"/"geometry"/"none") so the
+        # adherence harness can report which path the model chose. Default OFF —
+        # the server never reads it, so no shared mutable state is written there.
+        self._record_diagnostics = record_diagnostics
+        self.last_payload_kind: str | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings) -> LLMClassifier:
@@ -503,6 +525,13 @@ class LLMClassifier:
                 backend=Backend.GROQ,
                 model=settings.groq_model,
                 api_key=settings.require_groq_key(),
+                timeout_s=settings.llm_timeout_s,
+            )
+        if settings.llm_backend is Backend.OPENROUTER:
+            return cls(
+                backend=Backend.OPENROUTER,
+                model=settings.openrouter_model,
+                api_key=settings.require_openrouter_key(),
                 timeout_s=settings.llm_timeout_s,
             )
         return cls(
@@ -520,6 +549,8 @@ class LLMClassifier:
         utterance_id: str,
         context: ClassifierContext,
     ) -> DesignOp:
+        if self._record_diagnostics:
+            self.last_payload_kind = None
         try:
             raw = await self._complete(text, context)
             payload = _parse_and_repair(raw)
@@ -536,6 +567,9 @@ class LLMClassifier:
                     backend=str(self._backend),
                 )
                 return _noop(speaker_id=speaker_id, utterance_id=utterance_id, raw_text=text)
+
+            if self._record_diagnostics:
+                self.last_payload_kind = _payload_kind(payload)
 
             op = payload_to_op(
                 payload,
@@ -603,14 +637,25 @@ class LLMClassifier:
         ]
         return await self._send(messages)
 
+    # Per-backend OpenAI-compatible endpoint URLs.
+    _OPENAI_COMPAT_URLS: ClassVar[dict[Backend, str]] = {
+        Backend.GROQ: "https://api.groq.com/openai/v1/chat/completions",
+        Backend.OPENROUTER: "https://openrouter.ai/api/v1/chat/completions",
+    }
+
     async def _send(self, messages: list[dict[str, str]]) -> str:
         """Send a message list to the configured backend; return the raw content string."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            if self._backend is Backend.GROQ:
+            if self._backend in (Backend.GROQ, Backend.OPENROUTER):
+                url = self._OPENAI_COMPAT_URLS[self._backend]
+                headers: dict[str, str] = {"Authorization": f"Bearer {self._api_key}"}
+                if self._backend is Backend.OPENROUTER:
+                    headers["HTTP-Referer"] = "https://github.com/quorum"
+                    headers["X-Title"] = "Quorum"
                 resp = await self._post_with_retry(
                     client,
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    url,
+                    headers=headers,
                     json={
                         "model": self._model,
                         "messages": messages,

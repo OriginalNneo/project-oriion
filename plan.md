@@ -437,7 +437,15 @@ are GLM-5 70.3% and Kimi K2.5).
 | **D4** | Adherence eval + tiered models | Extend `eval_llm.py` to score **instruction adherence** (part counts, colors, overlap/coherence, relations), not just JSON validity. Benchmark GLM-5, Kimi K2.5, Cerebras-hosted Qwen3/gpt-oss on it. Add an **escalation tier** (Gemini 3 Flash or Claude Sonnet 4.6) for intricate/3D-classified prompts, streamed so the canvas animates while drawing | Measured adherence table in the ledger; escalation tier behind env config; fast tier still ≤ 2 s p95 |
 | **D5** | Polish loop + template growth (optional) | Async render→VLM-critique→repair pass (~$0.005–0.01/round) after the fast first draw; grow a curated intricate-template bank via frontier batch APIs (Opus/Gemini Pro at 50% batch discount, Recraft V4.1 Vector); verify TU-Berlin license (CC-BY-4.0?) and mine it | Polish round measurably improves the 10-prompt set without touching first-draw latency |
 
-> **Status (2026-06-13): D1 ✅ · D2 ✅ · D3 ✅ · D4/D5 next.** D3 shipped as a
+> **Status (2026-06-13): D1 ✅ · D2 ✅ · D3 ✅ · D4 part 1 ✅ · D4 part 2 / D5 next.**
+> D4 split into two segments: **part 1 (DONE)** = the instruction-adherence eval
+> harness (`quorum/eval/adherence.py`, deterministic/no-VLM: count/color/coherence/
+> relations/solids3d) + an OpenRouter backend + a measured cheap-tier benchmark
+> table (context.md §3 top) + the owed D3 live probe (the model emits `solids`).
+> **Part 2 (next)** = the escalation tier (intent-routed stronger model behind env
+> config) + streamed stage-C output + a restored ≤2 s fast tier — the cheap
+> OpenRouter routes measured 30–72 s p95, so they inform the escalation tier but
+> don't satisfy the live fast-tier budget. D3 shipped as a
 > pure DOMAIN transform (`domain/isometric.py` projects LLM-emitted axis-aligned
 > `solids` to a flat polygon/ellipse/path GROUP), **not** inside the renderer as
 > this table's wording suggested — both renderers + engine/replay already handle

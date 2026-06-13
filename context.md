@@ -5,7 +5,7 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-13  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo · compose-onto-existing**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, §14 voice undo + viewport follow, §15 canvas zoom/pan/adaptive + compose-onto-existing, AND D3 deterministic isometric projection — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **482 tests** (+46 D3), tsc, vite build (193 kB), latency p95 0.132 ms. Next: human browser confirm of §15 (agent-blind) + merge; then D4 (adherence eval + tiered models) — and a D3 live-probe once a working LLM key is available (plan.md §11).
+> **Last updated:** 2026-06-13  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo · compose-onto-existing**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, §14 voice undo + viewport follow, §15 canvas zoom/pan/adaptive + compose-onto-existing, AND D3 deterministic isometric projection — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **568 backend tests** (+87 D4: adherence+openrouter), latency p95 0.129 ms (unchanged). **D4 part 1 — instruction-adherence eval harness + OpenRouter backend + cheap-tier benchmark — DONE; D3 live-probe DONE (model emits `solids`, projection lands).** Next: D4 part 2 (escalation tier + streamed fast tier); still-pending human browser confirm of §15 + merges to main (plan.md §11).
 
 ---
 
@@ -26,7 +26,20 @@ backend tests**, tsc, vite build 193 kB); fast path p95 sub-ms; pending human
 browser confirm of §15 on branch ui-zoom-adaptive-canvas.
 
 ## 2. Current focus
-**D3 — deterministic isometric projection — DONE & eyeball-verified
+**D4 part 1 — instruction-adherence eval + OpenRouter backend + cheap-tier
+benchmark — DONE (2026-06-13, branch drawing-quality-d3).** A pure, no-vision
+scorer (`quorum/eval/adherence.py`) grades count/color/coherence/relations/
+solids3d; a runner (`scripts/eval_adherence.py`) with a keyless `--self-test`
+benchmarks models. OpenRouter is now a swappable OpenAI-compatible backend (the
+active one — Groq was 429-dead). The owed D3 live probe is closed: the cheapest
+model emits `solids` and the projection renders a coherent isometric assembly.
+Benchmark + 5 adversarial-review fixes recorded in §3 (top). **Next segment =
+D4 part 2: an escalation tier (intent-routed stronger model) + streamed fast
+tier (≤2 s p95) — the cheap OpenRouter routes are 30–72 s p95, escalation-tier
+latency, so they don't replace the live default.** Still pending (human-only):
+the §15 browser confirm + merges to main (below).
+
+**Prior — D3 — deterministic isometric projection — DONE & eyeball-verified
 (2026-06-13).** Branch: drawing-quality-d3 (off ui-zoom-adaptive-canvas, so it
 carries §15). LLM emits axis-aligned 3D `solids`; pure `domain/isometric.py`
 projects them to a flat isometric GROUP (model proposes, code disposes). 482
@@ -136,6 +149,67 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **D4 (part 1) — instruction-adherence eval + OpenRouter backend + cheap-tier
+  benchmark — DONE (2026-06-13, branch drawing-quality-d3; 568 tests (+87:
+  85 adherence, 2 openrouter), ruff+mypy clean (38 files), fast path p95
+  0.129 ms unchanged).** Delivers the "measured adherence table" half of
+  plan.md §11 D4; the escalation-tier + streamed-fast-tier half is the next
+  segment (§4). Also closes the owed D3 live probe.
+  - **`quorum/eval/adherence.py`** (NEW, pure, no vision model): scores how well
+    a result GeometrySpec ADHERES to an utterance across `count` (role-name
+    substring match), `color` (hue match via `domain/color.py` HSL — chromatic
+    vs achromatic branches; the near-black default stroke deliberately does NOT
+    count as "blue"), `coherence` (union-find bbox connectivity = anti
+    exploded-view), `relations` (inside/above/below/beside bbox predicates,
+    skip-if-unresolved), `solids3d` (the `solids` payload path OR a multi-band
+    shaded-fill signature). `overall` = mean of the APPLICABLE dims; invalid → 0.
+    Same "model proposes, code disposes" split: the model draws, the code
+    measures.
+  - **`scripts/eval_adherence.py`** (NEW): 11-prompt annotated set + multi-model
+    runner; **keyless `--self-test` (8/8 PASS)** scores fixtures so the harness
+    is verifiable WITHOUT a key.
+  - **OpenRouter wired as an OpenAI-compatible backend** (`Backend.OPENROUTER` +
+    settings + unified `_send` sharing the Groq code path; OpenRouter-only
+    `HTTP-Referer`/`X-Title` headers). Opt-in `record_diagnostics` on
+    `LLMClassifier` (default OFF → server writes no shared state) records each
+    payload's kind (solids/patch/geometry/none) for the harness. Groq free tier
+    was 429-dead; **OpenRouter (user's key, paid, $10 credit) is now the active
+    backend** (`QUORUM_LLM_BACKEND=openrouter`, model `inclusionai/ling-2.6-flash`).
+  - **D3 live probe (owed) — DONE & eyeball-verified:** "a 3D engine with three
+    pistons" via the cheapest model (ling-2.6-flash) → stage=llm, `solids` path
+    → a coherent isometric assembly (shaded block + 3 depth-sorted pistons,
+    rendered PNG eyeballed). The model EMITS `solids` and the projection lands —
+    closes the D3 debt (previously only the deterministic projection was verified).
+  - **Cheap-tier adherence benchmark** (3 models, 7 s pacing to dodge per-model
+    429s; OpenRouter passes upstream throttles through):
+    | model | valid | solids | overall* | count | color | coher | rel | solids3d | p50/p95 s |
+    |---|---|---|---|---|---|---|---|---|---|
+    | inclusionai/ling-2.6-flash (cheapest) | 11/11 | 3/3 | 0.90 | 0.90 | 0.70 | 0.97 | — | 1.0 | 5.8/29.7 |
+    | meta-llama/llama-3.1-8b-instruct | 11/11 | 2/3 | 0.91 | 1.0 | 0.80 | 0.0 | 1.0 | 10.8/41.7 |
+    | qwen/qwen3-235b-a22b-2507 | 10/11† | 3/3 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 14.8/71.8 |
+    *overall = mean over VALID rows (conditional on a drawing being produced).
+    †qwen's one BAD row was a **429-exhausted NOOP, not a quality fail**
+    (rate-limit-corrupted — same caveat as the 2026-06-11 Groq incident).
+    **Findings:** all 3 reliably use the `solids` path (solids3d 1.0 — D3
+    corroborated at the model level); **color-following is the cheap tier's weak
+    spot** (ling 0.70); relations are the hardest dimension. **Every cheap
+    OpenRouter route is 30–72 s p95 — escalation-tier latency, NOT the ≤2 s fast
+    tier** (latencies include 429-retry waits but per-call is still seconds). So
+    the benchmark INFORMS but does NOT promote a production default, and a
+    rate-limit NOOP is never read as a quality signal (decisions log).
+  - **Adversarial harness review (workflow, 3 lenses → verify): 5 real findings
+    fixed + pinned by regression tests** — (MED) `count` over-counts on
+    projected solids (face-decomposition multiplies role names: "piston-1" →
+    "piston-1-body"+"piston-1-top") → skip count on the `solids` path; (MED) a
+    full-canvas background rect bridged everything in `coherence` → exclude
+    near-full-canvas parts (≥85 in both dims) as connectors; (MED) `overall`
+    averaged NOOP zeros while dim columns didn't → condition `overall` on valid
+    rows (validity column carries coverage); (LOW) `solids3d` false-positive on
+    a white-bg+dark pair → exclude near-white (L>0.92) fills from the shading
+    signature; (LOW) annotation gaps → added handle/scarf/hat counts. The review
+    also independently CONFIRMED a self-caught bug fixed pre-review:
+    `NAMED_COLORS` black/white must be truly achromatic (s=0) or they read as a
+    dark blue / are unmatchable.
 - **D3 — deterministic isometric projection — DONE & eyeball-verified
   (2026-06-13, branch drawing-quality-d3; ruff+mypy clean, 482 tests
   (+46: 35 isometric, 11 d3_solids), latency p95 0.132 ms unchanged).**
@@ -909,18 +983,20 @@ _(append-only-ish; newest at top)_
    Then commit and merge ui-zoom-adaptive-canvas → main.
 0. [x] **D3 — deterministic isometric projection — DONE (2026-06-13).** See §3
    top entry. `domain/isometric.py` + LLM `solids` payload; eyeball-verified.
-1. **Resume point: Drawing Quality D4→D5** (D1/D2/D3 done) — full steps in §2's
-   numbered list above and plan.md §11. **D4 = adherence eval + tiered models**:
-   extend `eval_llm.py` to score instruction adherence (counts/colors/
-   coherence + now 3D solids coherence), benchmark GLM-5 / Kimi K2.5 /
-   Cerebras-hosted Qwen3 & gpt-oss, wire a streamed escalation tier (Gemini 3
-   Flash / Sonnet 4.6) for intricate/3D prompts. ⚠️ Groq quota was dead
-   2026-06-12 (70b + scout) — D4 should pick up the user's offered extra keys.
-   **D3 LIVE-PROBE STILL OWED:** with a working LLM key, drive "a 3D engine with
-   pistons" / "make this 3D" through the real Groq path (probe_llm.py) to
-   confirm the model actually emits `solids` and the projection lands — so far
-   only the deterministic projection is eyeball-verified, not the model's use
-   of the new tool. D5 (optional) = render→VLM-critique→repair polish.
+1. [x] **D4 part 1 — adherence eval + cheap-model benchmark — DONE (2026-06-13).**
+   See §3 top. `quorum/eval/adherence.py` (pure scorer) + `scripts/eval_adherence.py`
+   (annotated set + keyless self-test) + OpenRouter backend; benchmark table +
+   findings + 5 review fixes recorded. **D3 live-probe also DONE** (ling-2.6-flash
+   emits `solids`; coherent isometric engine eyeballed).
+2. **Resume point: D4 part 2 — escalation tier + streamed fast tier.** The cheap
+   OpenRouter routes measured 30–72 s p95 (escalation-tier latency), so they
+   don't satisfy the ≤2 s fast-tier budget. Next: (a) wire intent-routed model
+   selection (a stronger model — e.g. Gemini 3 Flash / Sonnet 4.6 — for
+   3D/intricate-classified utterances) behind env config; (b) stream stage-C
+   output so the canvas animates while drawing; (c) keep/restore a sub-2 s fast
+   tier (Groq/Cerebras) for the common path. Reuse `eval_adherence.py` to gate
+   any model promotion (never swap a default on a benchmark we didn't run / on a
+   rate-limit-corrupted row). D5 (optional) = render→VLM-critique→repair polish.
 2. [x] **Live-mic review** — DONE (see §3). Finding: needs richer geometry.
 3. [x] **Richer geometry — DONE via LLM stage C (tier B).** Stage turned ON
    (Groq) + prompt teaches polygon/path/text; verified live (see §3).
@@ -1007,6 +1083,10 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-13 | **D3 true-3D = project to a flat GROUP in the DOMAIN, not in the renderer** (plan.md §11 D3 said "renderer does it"). LLM emits transient `solids` (box/cylinder/wedge, x,y,z,w,d,h); `domain/isometric.project_solids` does the 30° projection→shading→cull→z-sort→fit, producing polygon/ellipse/path parts | Both renderers + engine/replay/wire already handle GROUPs (the extrude.py / make_isometric.py precedent), so a domain transform = ZERO renderer/client changes and the projection written ONCE. Plan's spirit (deterministic, pure, cached, LLM does no math) fully honored; only the layer differs. Flagged per CLAUDE.md §7 — does NOT reorder the queue |
 | 2026-06-13 | **Projected 3D bypasses `snap_relations`** (`from_solids` flag in `payload_to_op`) | A 3D utterance with "inside/within/in it" made `_snap_all_inside` treat the cylinder's top-cap (the last part) as "newly added" and yank it into the body — silent corruption. The projection is already exact; relation-snapping is for LLM-placed parts, not code-projected ones (adversarial-review HIGH find) |
 | 2026-06-13 | **Isometric circle projects with a √2 factor**: screen semi-axes = r·√2·cos30 and r·√2·sin30 | The projected horizontal circle's extrema are at cos t ∓ sin t = ±√2; dropping √2 (first cut did) made every cylinder 29% too narrow. Math, not taste — the same "code does the arithmetic" principle as tangency/extrusion (adversarial-review MED find, pinned by test) |
+| 2026-06-13 | **OpenRouter is an OpenAI-compatible LLM backend** (`Backend.OPENROUTER`), a config swap not a rewrite; it is the ACTIVE backend (Groq free tier 429-dead). User directive "use the cheapest model" → default `inclusionai/ling-2.6-flash` | Same 12-factor seam as Groq/Ollama (RULES.md §5): one `_send` path, per-backend URL + optional OpenRouter headers. A paid key with $10 credit removes the Groq quota fragility that broke §13/§14 live probes |
+| 2026-06-13 | **Instruction-adherence is scored by a pure, deterministic, no-VLM scorer** (`quorum/eval/adherence.py`): count/color (HSL hue)/coherence (union-find)/relations (bbox)/solids3d (shading signature OR `solids` path); `overall` = mean of APPLICABLE dims; a keyless `--self-test` gates the harness itself | "Model proposes, code disposes" applied to evaluation: the model draws, the code measures. No vision model keeps it fast, free, deterministic and CI-able. The harness — not the model — is the thing we must trust, so it is adversarially reviewed and unit-tested (85 tests) before any number is believed |
+| 2026-06-13 | **Adherence scoring guards (from the adversarial review):** coherence EXCLUDES near-full-canvas background parts (they'd bridge an exploded foreground); count SKIPS the `solids` path (projection face-decomposition multiplies role names); `overall` is conditioned on VALID rows (dim columns already are); near-white fills don't count as shaded 3D faces | A benchmark is only as trustworthy as its metric. Each guard closes a way a model could score high without adhering (or low despite adhering). Pinned by regression tests so the gaming vector can't silently return |
+| 2026-06-13 | **Do NOT swap the production default on this benchmark.** Cheap OpenRouter routes measured 30–72 s p95 (escalation-tier latency, not the ≤2 s fast tier); qwen3-235b "won" on adherence (1.0) but had a 429-exhausted NOOP row and the slowest latency | Reinforces the 2026-06-11 Groq-quota lesson: rate-limit-corrupted rows are not quality signals, and a benchmark we ran on slow/throttled routes can't promote a live default. The benchmark INFORMS the D4-part-2 escalation tier; it does not auto-promote |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -1037,10 +1117,10 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
 | Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks + §14 undo branch 0 + §15 compose branch 5b (~0 ms) |
-| Classify (LLM) | <1.5 s local / <0.8 s Groq | scene create ~1.0/1.8 s; **scene-edit PATCH ~1.2–1.5 s live** (scout); full restyle re-emission ~3.5–5.5 s | ON. Patch edits (add/set/remove parts) are ~3x faster than full re-emission — most §13 edits are patches; many follow-ups (recolor, part size, extrusion) never reach the LLM at all |
+| Classify (LLM) | <1.5 s local / <0.8 s Groq | scene create ~1.0/1.8 s; **scene-edit PATCH ~1.2–1.5 s live** (scout); full restyle re-emission ~3.5–5.5 s. **OpenRouter cheap tier (D4 benchmark 2026-06-13): p50 5.8–14.8 s / p95 30–72 s** (incl. 429-retry waits) | ON. Patch edits (add/set/remove parts) are ~3x faster than full re-emission. **The cheap OpenRouter routes are escalation-tier latency, NOT fast-tier — keep Groq/Cerebras for the live default; OpenRouter is the quota-resilient fallback / D4-part-2 escalation candidate** |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
 | Engine apply | (internal) | **0.05 ms / 0.06 ms** | DAG mutation + event append; modify creates + renders a child node (§12); §14 undo = focus move only |
-| **End-to-end (server fast path)** | **<5 s** | **0.093 ms / 0.132 ms** | classify+engine+render. D3 adds NOTHING to the fast path (true-3D `solids` projection lives in the LLM stage; `payload_to_op` projects once, ~sub-ms, off the hot path); p95 0.128→0.132 ms is run-to-run variance; ~38,000x under budget |
+| **End-to-end (server fast path)** | **<5 s** | **0.093 ms / 0.129 ms** | classify+engine+render. D3 AND D4 add NOTHING to the fast path — D4 is offline eval tooling (`quorum/eval`, `scripts/eval_adherence.py`) plus a default-OFF `record_diagnostics` hook on the LLM stage; the `solids` projection still lives in the LLM stage. p95 0.132→0.129 ms is run-to-run variance; ~38,000x under budget |
 
 > Read-back: the server-side fast path stays ~4 orders of magnitude under the
 > 5 s budget. The real human-perceived latency now has two contributors: the
