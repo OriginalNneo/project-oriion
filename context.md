@@ -5,50 +5,54 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, AND §14 voice undo + viewport follow — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **393 tests**, tsc, vite build. Next: user's mind-map design reference (incoming) → canvas redesign; human browser confirm; then D3 (plan.md §11).
+> **Last updated:** 2026-06-13  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo · compose-onto-existing**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, §14 voice undo + viewport follow, AND §15 canvas zoom/pan/adaptive + compose-onto-existing — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **436 tests**, tsc, vite build (193 kB). Next: human browser confirm of §15; then commit/merge branch ui-zoom-adaptive-canvas; then D3 (plan.md §11).
 
 ---
 
 ## 1. One-line status
 **Voice MVP + compositional iteration (§12) + part-level editing & in-chain
-3D conversion (§13) shipped.** Every modify branches a new mind-map child;
-recolors/restyles/extrusions/part edits are deterministic where they can be
-("a hexagon" → "turn this hexagon pink" → "make this hexagon three
-dimensional" runs entirely rules-stage at 0 ms, ending in a cabinet-extruded
-prism in three pink shades); the LLM edits scenes via a compact set/add/
-remove PATCH against named parts ("add two eyes to this mouse" = 1.2 s,
-originals byte-identical) and the rules layer handles part-scoped follow-ups
-("make one eye bigger than the other" = 0 ms, only that eye grows). All
-checks green (ruff, mypy, **354 backend tests**, tsc, vite build); fast path
-p95 0.178 ms; `e2e_check.py` 16/16 ALL PASS. Next: human browser confirm,
-then D3 — true 3D projection (plan.md §11).
+3D conversion (§13) + voice undo (§14) + canvas zoom/pan/adaptive + compose-onto-existing (§15) shipped.**
+Every modify branches a new mind-map child; recolors/restyles/extrusions/part edits are
+deterministic where they can be ("a hexagon" → "turn this hexagon pink" →
+"make this hexagon three dimensional" runs entirely rules-stage at 0 ms,
+ending in a cabinet-extruded prism in three pink shades); the LLM edits
+scenes via a compact set/add/remove PATCH against named parts ("add two eyes
+to this mouse" = 1.2 s, originals byte-identical); "a box above the horse"
+composes onto the horse node as a child (conf 0.8, rules, deterministic
+placement). The canvas is now full-bleed with zoom/pan/Fit controls (0.2–2.5×),
+a Follow toggle, and a uniform ring-step radial layout (bug: depth-compounding
+was making each successive edge longer). All checks green (ruff, mypy, **436
+backend tests**, tsc, vite build 193 kB); fast path p95 sub-ms; pending human
+browser confirm of §15 on branch ui-zoom-adaptive-canvas.
 
 ## 2. Current focus
-**§13 Part-level editing & in-chain 3D conversion — DONE (2026-06-12), all
-segments (see §3):** N1 demonstrative references ✅ · N2 part addressing +
-part-scoped fast path + fallback inversion ✅ · N3 LLM patch contract +
-template part names ✅ · N4 deterministic cabinet extrusion ✅ · N5
-integration (e2e ALL PASS, live probes, two integration bugs caught & fixed:
-extrude winding flip, modifier double-fold) ✅. §12 (mind-map iteration,
-recolor, labels, named shapes, restyle, radial canvas) was DONE earlier the
-same day. **Awaiting the human browser pass** — the full confirm script is
-§4 item 0. Then back to plan.md §11 D3-D5.
+**§15 UI canvas (zoom/pan/adaptive + focus-follow) + compose-onto-existing — DONE
+(2026-06-13), pending human browser confirm.** Branch: ui-zoom-adaptive-canvas.
+Built via a 5-phase workflow (design watchlist → 2 parallel implementers on
+disjoint files → build gate → 3 adversarial review lenses → fix); 8 high/med
+review bugs found and fixed. tsc + vite build green (193 kB bundle).
 
-**User browser verdict (2026-06-12 evening): "right now, it's really
-nice."** New feedback captured as §4 item -1 (voice undo / go-back,
-mind-map viewport UX — iterations land too far away, and a user-provided
-design reference to collect BEFORE any canvas redesign).
+Key frontend changes: new `usePanZoom.ts` (pointer events, ctrl/pinch zoom,
+drag-pan, clamp 0.2–2.5×, Fit/recenter, ResizeObserver, StrictMode-safe);
+new `ZoomControls.tsx` (−/%/+/Fit/Recenter/Follow toggle); `IdeaTree.tsx`
+redesigned as `.idea-scroll > .idea-viewport(CSS transform) > .idea-canvas`;
+focus-follow pauses while gesturing; **radial layout bug fixed** (depth-
+compounding: `kidRadius = childDepth*R` made chains land at 0,R,3R,7R… — now
+uniform `kidRadius = R`, tightened from ~288 px to `max(cw,ch)+60`).
+`styles.css` full-bleed map (overflow:hidden + transform pan replaces grid
+overflow-clip that made large maps unreachable); transcript → collapsible
+`<details>` drawer; `ParticipantView.tsx` controls width-capped; `DisplayView.tsx`
+full-bleed stage.
 
-**§14 program — DONE (2026-06-12, this session), pending the human
-browser pass.** The three pinned questions were ASKED AND ANSWERED by the
-user: (1) the mind-map design reference is INCOMING — user will share it
-in their next message; the canvas redesign stays GATED on it; (2) "zoom
-back out" = **go back / undo**, not a literal view zoom; (3) on go-back
-the abandoned child **stays visible** (no prune, no fade). Design in
-plan.md §14. U1 UNDO op ✅ · U2 undo grammar ✅ · U3 viewport follow ✅ ·
-U4 integration (e2e ALL PASS) ✅. 393 tests, all checks green, fast path
-p95 0.128 ms. ⚠️ Groq: 70b AND scout both quota-dead today; every §14
-path is deterministic and ran without the LLM.
+Key backend change: **compose-onto-existing** (new `domain/compose.py`,
+classifier branch 5b). "Draw a horse" then "draw a box above the horse" now
+composes the box onto the horse as a child iteration, not a standalone node.
+436 tests (was 393; +43), ruff+mypy clean, pytest 0.53 s, latency green.
+
+**Prior programs still current:**
+§14 UNDO op ✅ · undo grammar ✅ · viewport follow ✅ · e2e ALL PASS ✅.
+§13/§12 all segments DONE. Fast path p95 sub-ms. ⚠️ Groq 70b AND scout both
+quota-dead 2026-06-12; all deterministic paths run without the LLM.
 
 **Previous program (2026-06-11): Drawing Quality D1–D5 — D1/D2 done, D3–D5
 resume after the §12 browser confirm. Steps:**
@@ -119,6 +123,52 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **§15 — UI canvas zoom/pan/adaptive + compose-onto-existing — DONE
+  (2026-06-13, branch ui-zoom-adaptive-canvas; tsc + vite build 193 kB,
+  436 tests, ruff+mypy clean, pytest 0.53 s).** 5-phase workflow: design
+  watchlist → 2 parallel implementers on disjoint files → build gate → 3
+  adversarial review lenses → fix-pass; 8 confirmed high/med bugs caught & fixed.
+  - **`frontend/src/usePanZoom.ts`** (new, zero deps): pointer events; ctrl/
+    meta-wheel + 2-pointer pinch zoom-about-cursor; plain-wheel pan; drag-pan;
+    clamp 0.2–2.5×; Fit/auto-fit/recenter; ResizeObserver; StrictMode-safe
+    cleanup + pointer-capture release; wheel listener `{passive:false}` so
+    `preventDefault` works (React `onWheel` is passive).
+  - **`frontend/src/ZoomControls.tsx`** (new): −/%/+/Fit/Recenter/Follow
+    toggle (`aria-pressed`); `stopPropagation` so control clicks never pan.
+  - **`frontend/src/IdeaTree.tsx`**: structure now `.idea-scroll >
+    .idea-viewport(CSS transform) > .idea-canvas`; focus-follow recenters the
+    focused card in transform space, PAUSES while gesturing, gated on the
+    Follow toggle; "sketching…" badge on the focused card when pipeline
+    status != idle. **FIXED radial-layout depth-compounding bug:**
+    `kidRadius = childDepth*R` made chains land at 0,R,3R,7R — now uniform
+    `kidRadius = R`, tightened from ~288 px to `max(cw,ch)+60`.
+  - **`frontend/src/styles.css`**: FIXED `.idea-scroll` `grid place-items:
+    center overflow-clip` bug that made large maps unreachable (now
+    `overflow:hidden` + transform pan; `.idea-canvas` drops `margin:auto`);
+    participant map is full-bleed; transcript → collapsible `<details>` drawer;
+    Display `.display-stage` full-bleed; `prefers-reduced-motion`;
+    `max-width:640px` responsive pass; zoom-controls / `.zc-btn` / `.sketch-badge` CSS.
+  - **`frontend/src/ParticipantView.tsx`**: controls inner block width-capped,
+    transcript drawer, Undo button (sends utterance text "undo").
+  - **`frontend/src/DisplayView.tsx`**: full-bleed stage.
+  - **`backend/quorum/domain/compose.py`** (new, pure):
+    `place_relative(target, new_part, relation)` → flat GROUP fit to the
+    0..100 box; relations above/below/left/right/on_top/behind/inside;
+    z-order (behind prepends, others append; on_top painted last); reuses
+    `relations.py` `part_bbox` + `_contain`; guards the 60-part limit. Minor
+    deferred: `_translate_part` clamps before fit-to-box so an added shape
+    can be slightly squished when the target hugs a canvas edge.
+  - **`backend/quorum/pipeline/classify.py`**: new branch 5b — "[create/draw/
+    add/put/place] a <shape> <spatial relation> the <existing node>" → compose-
+    MODIFY of the RESOLVED target node (conf 0.8, source=rules, modifiers=[]);
+    engine branches a child (§12-R1); falls back to focus when no explicit
+    target. Over-trigger guards: does NOT hijack plain create, multi-shape
+    create, or recolor; unresolved definite reference blocks the implicit-focus
+    fallback; `_detect_relation` maps "on top" (without "of") to `on_top` not
+    `above`; branch 5 yields to 5b when a mentioned shape resolves to an
+    existing definite node.
+  - New tests: `backend/tests/test_compose.py` and additions to
+    `backend/tests/test_classifier.py`.
 - **§14 U1+U2+U4 — voice undo/go-back — DONE, e2e ALL PASS (2026-06-12;
   U1/U2 by a Sonnet subagent, integrated + gated on the main thread).**
   393 tests (was 354; +39 in test_undo.py), ruff+mypy clean, fast path p95
@@ -778,32 +828,24 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
--1. **Mind-map canvas redesign — GATED on the user's design reference
-   (user confirmed 2026-06-12 they'll share it in their next message).**
-   Do NOT invent a layout — design the next program (§15) around the
-   reference when it lands. The 2026-06-12-evening feedback that drove
-   §14 is otherwise RESOLVED: voice undo/go-back ✅ ("zoom back out" =
-   user-confirmed undo synonym), viewport follow ✅ (the focused card now
-   auto-centers; ring-spacing/zoom-to-fit questions fold into the
-   redesign).
-0. **Browser live-confirm of §12 + §13 + §14 (the one thing the agent
-   can't observe):** Participant tab, speak:
-   - "draw a cat" → "make the cat orange" → "shade it into a tabby"
-   - "draw a cuboid" → "I want the cube to be red"
-   - "a hexagon" → "turn this hexagon pink" → "make this hexagon
-     three-dimensional" (should be instant — no LLM)
-   - "a mouse" → "add two eyes to this mouse" → "make one eye bigger than
-     the other" (eyes ~1-2 s; the eye edit instant)
-   - **§14:** after the hexagon chain say "never mind, go back" twice
-     (focus walks back to the plain hexagon, pink/3D children stay
-     visible) then "make it blue" (a blue SIBLING branches). Confirm the
-     view auto-centers on the focused card at every step (the viewport
-     follow — the part only a human can judge).
-   Confirm each iteration extends OUTWARD as a new mind-map node, edits land
-   on the same shape, and the radial layout/animations feel right.
-   ⚠️ Server currently runs the scout model — but on 2026-06-12 BOTH 70b
-   and scout went quota-dead; the LLM steps (tabby, mouse eyes) need a
-   fresh quota window or a new key. Everything else is deterministic.
+-1. **Human browser confirm of §15 (the one thing the agent can't observe).**
+   Servers live: backend :8000 (restarted with compose) and Vite :5173.
+   Branch: ui-zoom-adaptive-canvas (uncommitted — commit after confirm).
+   Check:
+   - Zoom out with ctrl-wheel (or pinch on mobile) — map zooms about the cursor.
+   - Pan by dragging — map pans, cards not clipped at edges.
+   - Press Fit — map fits all cards into view.
+   - Toggle Follow — enable it, say an utterance that creates a child: the
+     focused card should scroll into view; drag-pan while it's auto-following
+     and confirm follow pauses while gesturing.
+   - **Uniform tighter spacing** — a 4-hop chain should look compact, not exploding.
+   - **Compose:** restart backend if needed, say "draw a horse" then "draw a box
+     above the horse" — the box should land as a child of the horse node with
+     a compose-MODIFY, not a standalone new node.
+   Then commit and merge ui-zoom-adaptive-canvas → main.
+0. **Resume drawing-quality D3→D5** (D1/D2 done) — full steps in §2, design
+   intent in plan.md §11. D3 = deterministic isometric projection
+   (box/cylinder/wedge IR; renderer does the math).
 1. **Resume point after that: Drawing Quality D3→D5** (D1/D2 done) — full
    steps in §2, design intent in plan.md §11. D3 = deterministic isometric
    projection (box/cylinder/wedge IR; renderer does the math).
@@ -887,6 +929,9 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-12 | Undo guard: "go back to the <X>" where X resolves to a label/shape falls through to FOCUS resolution; parent-chain undo over focus-history undo | "go back to the cat" is a directed focus move, not an undo. Parent-chain semantics need zero new replayed state; focus-history undo (handles cross-root hops) deferred until live use demands it |
 | 2026-06-12 | e2e harness: a LIVE-but-quota-dead LLM = loud SKIP of the LLM-scene step (15 s timeout-tolerant), never a hang | A 429-dead LLM falls back to NOOP → no diff is broadcast → the script hung at the rocket step and the LLM-FREE steps after it never ran. Mock-skip already existed; quota-dead is a distinct environment state. Assertions unchanged when a diff arrives |
 | 2026-06-12 | Viewport follow scrolls to the focused card's LAYOUT coords, not its rendered box | Cards animate left/top over 0.45 s — `scrollIntoView` would chase a mid-transition position; the layout map already holds the final coordinates |
+| 2026-06-13 | Radial mind-map uses a **UNIFORM ring step** (`kidRadius = R`, one card + ~60px gap); never compound radius with depth | `childDepth*R` made each successive iteration hop's edge longer than the last (0,R,3R,7R) — "line across too big" (user report). Uniform step + zoom/fit handles density. |
+| 2026-06-13 | Canvas pan/zoom is **hand-rolled (zero deps)** and is LOCAL VIEW state (RULES.md §4 — not authoritative session state); imperative pointer/wheel listeners with `{passive:false}` | React's synthetic `onWheel` is passive so `preventDefault` can't be called on it; a local transform is not session state and must not flow through the engine. No external pan/zoom library — avoids bundle bloat and dependency lock-in. |
+| 2026-06-13 | **Compose-onto-existing** = DETERMINISTIC placement (code proposes AND disposes), conf-0.8 rules fast path, modifiers=[] pre-baked, targets the RESOLVED named node (not just focus); over-trigger guards keep plain/multi-shape create intact | Quota-resilient (Groq often 429-dead) and "a box above the horse" must extend the horse, not spawn a standalone node. Deterministic `place_relative` matches the model-proposes-code-disposes pattern used throughout. |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -916,7 +961,7 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 |---|---|---|---|
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
-| Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks + §14 undo branch 0 |
+| Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks + §14 undo branch 0 + §15 compose branch 5b (~0 ms) |
 | Classify (LLM) | <1.5 s local / <0.8 s Groq | scene create ~1.0/1.8 s; **scene-edit PATCH ~1.2–1.5 s live** (scout); full restyle re-emission ~3.5–5.5 s | ON. Patch edits (add/set/remove parts) are ~3x faster than full re-emission — most §13 edits are patches; many follow-ups (recolor, part size, extrusion) never reach the LLM at all |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
 | Engine apply | (internal) | **0.05 ms / 0.06 ms** | DAG mutation + event append; modify creates + renders a child node (§12); §14 undo = focus move only |

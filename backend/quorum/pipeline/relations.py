@@ -171,7 +171,7 @@ def _snap_all_inside(
             is_new = [False] * (len(geom.parts) - 1) + [True]
     else:
         is_new = [False] * (len(geom.parts) - 1) + [True]
-    host_boxes = [_part_bbox(p) for p, new in zip(geom.parts, is_new, strict=True) if not new]
+    host_boxes = [part_bbox(p) for p, new in zip(geom.parts, is_new, strict=True) if not new]
     if not host_boxes:
         return geom
     hx1 = min(b[0] for b in host_boxes)
@@ -187,13 +187,23 @@ def _snap_all_inside(
     return geom.model_copy(update={"parts": parts}) if changed else geom
 
 
-def _part_bbox(part: GeometrySpec) -> tuple[float, float, float, float]:
+def part_bbox(part: GeometrySpec) -> tuple[float, float, float, float]:
+    """Return the axis-aligned bounding box of *part* as (x1, y1, x2, y2).
+
+    Public so :mod:`quorum.domain.compose` and other pure-function modules can
+    compute bounding boxes without duplicating the polygon-aware logic.
+    """
     if part.points:
         xs = [pt[0] for pt in part.points]
         ys = [pt[1] for pt in part.points]
         return min(xs), min(ys), max(xs), max(ys)
     hw, hh = part.width / 2, part.height / 2
     return part.x - hw, part.y - hh, part.x + hw, part.y + hh
+
+
+# Backwards-compatible alias — internal callers migrate to `part_bbox` but
+# external code that already imported the private name continues to work.
+_part_bbox = part_bbox
 
 
 def _contain(
@@ -205,7 +215,7 @@ def _contain(
     polygons move via their points. Paths pass through untouched — rewriting
     curve data is the validator's domain, not a placement snap's.
     """
-    x1, y1, x2, y2 = _part_bbox(part)
+    x1, y1, x2, y2 = part_bbox(part)
     if hx1 <= x1 and hy1 <= y1 and x2 <= hx2 and y2 <= hy2:
         return part  # already inside
     if part.kind is ShapeKind.PATH or part.kind is ShapeKind.GROUP:

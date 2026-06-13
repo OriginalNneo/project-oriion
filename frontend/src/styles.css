@@ -51,12 +51,12 @@ body,
 }
 
 /* ---------------- Participant ---------------- */
+/* max-width removed from .participant — the map needs full-bleed width;
+   controls inner content is capped separately via .controls-inner */
 .participant {
   display: flex;
   flex-direction: column;
   height: 100%;
-  max-width: 680px;
-  margin: 0 auto;
 }
 .bar {
   display: flex;
@@ -88,6 +88,11 @@ body,
   padding: 14px 16px;
   background: var(--panel);
   border-bottom: 1px solid #222a44;
+}
+/* Cap only the controls inner content, not the full participant column. */
+.controls-inner {
+  max-width: 680px;
+  margin: 0 auto;
 }
 .controls .row {
   margin-bottom: 10px;
@@ -184,48 +189,96 @@ button:disabled {
   color: var(--ink);
 }
 
+/* Undo button — compact, inline with the say row */
+.btn-undo {
+  background: transparent;
+  border: 1px solid #2c3658;
+  color: var(--muted);
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  border-radius: 10px;
+  flex: 0 0 auto;
+}
+.btn-undo:hover {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+
+/* tree-wrap: full-bleed flex region. No overflow:auto — pan layer handles
+   all scrolling. min-height:0 lets the flex child shrink inside its column. */
 .tree-wrap {
   flex: 1;
-  overflow: auto;
-  padding: 12px;
+  min-height: 0;
+  overflow: hidden;
 }
-.transcript {
+
+/* Transcript collapsible drawer. Replaces the fixed 28% band. */
+.transcript-drawer {
   background: var(--panel);
   border-top: 1px solid #222a44;
-  padding: 8px 16px 14px;
-  max-height: 28%;
-  overflow: auto;
 }
-.transcript h4 {
-  margin: 6px 0;
+.transcript-drawer summary {
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 0.8rem;
   color: var(--muted);
   font-weight: 600;
-  font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  user-select: none;
 }
-.transcript ul {
+.transcript-drawer summary::-webkit-details-marker {
+  color: var(--muted);
+}
+.transcript-drawer .transcript-body {
+  max-height: 180px;
+  overflow: auto;
+  padding: 0 16px 14px;
+  touch-action: pan-y; /* re-enable scroll within this drawer on iOS */
+}
+.transcript-drawer ul {
   margin: 0;
   padding-left: 0;
   list-style: none;
   font-size: 0.9rem;
 }
-.transcript li {
+.transcript-drawer li {
   padding: 2px 0;
   color: var(--ink);
 }
 
 /* ---------------- Idea tree ---------------- */
+/* centering removed — transform-based pan instead */
 .idea-scroll {
+  position: relative;
   width: 100%;
   height: 100%;
-  overflow: auto;
-  display: grid;
-  place-items: center;
+  overflow: hidden;
+  touch-action: none; /* pointer events drive pan/zoom; iOS re-enables within .transcript-drawer */
+  cursor: grab;
+  user-select: none;
 }
+.idea-scroll.grabbing {
+  cursor: grabbing;
+}
+
+/* Transform wrapper — the element whose CSS transform is animated for follow/fit. */
+.idea-viewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0; /* zoom math uses top-left origin */
+  will-change: transform;
+}
+/* Smooth follow/fit animation; only active class adds the transition so drag is 1:1. */
+.idea-viewport.animating {
+  transition: transform 0.4s ease-out;
+}
+
+/* centering removed — transform-based pan instead */
 .idea-canvas {
   position: relative;
-  margin: auto;
+  /* margin:auto dropped — layout positions are in transform space */
 }
 .idea-edges {
   position: absolute;
@@ -271,6 +324,10 @@ button:disabled {
   opacity: 0.45;
   filter: grayscale(0.6);
 }
+/* Sketch badge sits on the focused card while the pipeline is active. */
+.node-card.sketching {
+  outline-color: var(--accent-2);
+}
 .node-canvas {
   flex: 1;
   padding: 10px;
@@ -308,6 +365,65 @@ button:disabled {
   border-bottom: 1px solid #e2e8f0;
 }
 
+/* Sketch badge — pulsing status pip on the active focused card. */
+@keyframes sketch-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.sketch-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 0.66rem;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  animation: sketch-pulse 1.4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ZoomControls — floating panel bottom-right of .idea-scroll. */
+.zoom-controls {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid #2c3658;
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.zc-btn {
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.zc-btn:active {
+  transform: translateY(1px);
+}
+.zc-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+.zc-pct {
+  font-size: 0.8rem;
+  color: var(--muted);
+  min-width: 38px;
+  text-align: center;
+}
+
 /* ---------------- Display ---------------- */
 .display {
   display: flex;
@@ -323,12 +439,12 @@ button:disabled {
 .display-bar .room {
   color: var(--muted);
 }
+/* centering removed — transform-based pan instead; IdeaTree fills full stage */
 .display-stage {
   flex: 1;
-  overflow: auto;
-  display: grid;
-  place-items: center;
-  padding: 24px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
 }
 .display-foot {
   padding: 16px 28px;
@@ -339,4 +455,57 @@ button:disabled {
 .display-foot .live {
   color: var(--accent-2);
   text-transform: capitalize;
+}
+
+/* ---------------- Responsive: narrow phones ---------------- */
+@media (max-width: 640px) {
+  .voice-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .mic {
+    min-width: unset;
+    width: 100%;
+  }
+  .say {
+    flex-direction: column;
+  }
+  .say input {
+    width: 100%;
+  }
+  .controls-inner {
+    max-width: 100%;
+  }
+  .shape-grid {
+    grid-template-columns: 1fr;
+  }
+  .zoom-controls {
+    right: 8px;
+    bottom: 8px;
+    padding: 4px;
+    gap: 4px;
+  }
+  .zc-btn {
+    padding: 5px 7px;
+    font-size: 0.8rem;
+  }
+}
+
+/* ---------------- Motion preferences ---------------- */
+/* Disable all animation and transition for users who prefer reduced motion.
+   Covers: card enter, position/transform transitions, viewport follow animation. */
+@media (prefers-reduced-motion: reduce) {
+  .node-card {
+    animation: none !important;
+    transition: none !important;
+  }
+  .idea-viewport {
+    transition: none !important;
+  }
+  .sketch-badge {
+    animation: none !important;
+  }
+  .mic.on {
+    animation: none !important;
+  }
 }
