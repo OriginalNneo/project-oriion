@@ -437,6 +437,17 @@ are GLM-5 70.3% and Kimi K2.5).
 | **D4** | Adherence eval + tiered models | Extend `eval_llm.py` to score **instruction adherence** (part counts, colors, overlap/coherence, relations), not just JSON validity. Benchmark GLM-5, Kimi K2.5, Cerebras-hosted Qwen3/gpt-oss on it. Add an **escalation tier** (Gemini 3 Flash or Claude Sonnet 4.6) for intricate/3D-classified prompts, streamed so the canvas animates while drawing | Measured adherence table in the ledger; escalation tier behind env config; fast tier still ≤ 2 s p95 |
 | **D5** | Polish loop + template growth (optional) | Async render→VLM-critique→repair pass (~$0.005–0.01/round) after the fast first draw; grow a curated intricate-template bank via frontier batch APIs (Opus/Gemini Pro at 50% batch discount, Recraft V4.1 Vector); verify TU-Berlin license (CC-BY-4.0?) and mine it | Polish round measurably improves the 10-prompt set without touching first-draw latency |
 
+> **Status (2026-06-13): D1 ✅ · D2 ✅ · D3 ✅ · D4/D5 next.** D3 shipped as a
+> pure DOMAIN transform (`domain/isometric.py` projects LLM-emitted axis-aligned
+> `solids` to a flat polygon/ellipse/path GROUP), **not** inside the renderer as
+> this table's wording suggested — both renderers + engine/replay already handle
+> GROUPs, so the domain layer means zero renderer/client changes and the
+> projection is written once. The plan's intent (deterministic, pure, cached,
+> LLM does no projection math) is fully met. Full record + adversarial-review
+> fixes in `context.md` §3 (top) and the decisions log. D4 still owes a live
+> model probe that the LLM actually emits `solids` (only the projection is
+> eyeball-verified so far).
+
 ### Model strategy (tiered — latency is the binding constraint)
 At ~1.5k output tokens only Groq (~400–500 tok/s) and Cerebras (~3,000 tok/s)
 fit the 1–2 s live budget; frontier models take 12–30 s. So: **fast tier**

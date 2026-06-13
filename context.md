@@ -5,13 +5,13 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-13  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo · compose-onto-existing**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, §14 voice undo + viewport follow, AND §15 canvas zoom/pan/adaptive + compose-onto-existing — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **436 tests**, tsc, vite build (193 kB). Next: human browser confirm of §15; then commit/merge branch ui-zoom-adaptive-canvas; then D3 (plan.md §11).
+> **Last updated:** 2026-06-13  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo · compose-onto-existing**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, §14 voice undo + viewport follow, §15 canvas zoom/pan/adaptive + compose-onto-existing, AND D3 deterministic isometric projection — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **482 tests** (+46 D3), tsc, vite build (193 kB), latency p95 0.132 ms. Next: human browser confirm of §15 (agent-blind) + merge; then D4 (adherence eval + tiered models) — and a D3 live-probe once a working LLM key is available (plan.md §11).
 
 ---
 
 ## 1. One-line status
 **Voice MVP + compositional iteration (§12) + part-level editing & in-chain
-3D conversion (§13) + voice undo (§14) + canvas zoom/pan/adaptive + compose-onto-existing (§15) shipped.**
+3D conversion (§13) + voice undo (§14) + canvas zoom/pan/adaptive + compose-onto-existing (§15) + deterministic isometric projection (D3) shipped.**
 Every modify branches a new mind-map child; recolors/restyles/extrusions/part edits are
 deterministic where they can be ("a hexagon" → "turn this hexagon pink" →
 "make this hexagon three dimensional" runs entirely rules-stage at 0 ms,
@@ -26,11 +26,24 @@ backend tests**, tsc, vite build 193 kB); fast path p95 sub-ms; pending human
 browser confirm of §15 on branch ui-zoom-adaptive-canvas.
 
 ## 2. Current focus
-**§15 UI canvas (zoom/pan/adaptive + focus-follow) + compose-onto-existing — DONE
-(2026-06-13), pending human browser confirm.** Branch: ui-zoom-adaptive-canvas.
-Built via a 5-phase workflow (design watchlist → 2 parallel implementers on
-disjoint files → build gate → 3 adversarial review lenses → fix); 8 high/med
-review bugs found and fixed. tsc + vite build green (193 kB bundle).
+**D3 — deterministic isometric projection — DONE & eyeball-verified
+(2026-06-13).** Branch: drawing-quality-d3 (off ui-zoom-adaptive-canvas, so it
+carries §15). LLM emits axis-aligned 3D `solids`; pure `domain/isometric.py`
+projects them to a flat isometric GROUP (model proposes, code disposes). 482
+tests, ruff+mypy clean, latency p95 0.132 ms (no regression). Built by one
+Sonnet subagent (the projection module) + main-thread LLM/prompt wiring, then a
+3-lens adversarial-review workflow (2 HIGH + 3 MED real bugs fixed & pinned).
+Eyeball gate ✓ (cube/engine/wedge/cylinder/stack). Full details + the
+plan-divergence flag in §3 (top entry).
+
+**Still pending (human-only): browser confirm of §15** (the agent can't observe
+it). Servers were live :8000/:5173 on the §15 code. Then commit/merge §15 → main
+and D3 → main (disjoint files: §15 frontend, D3 backend — independent PRs).
+
+**Prior — §15 UI canvas (zoom/pan/adaptive + focus-follow) + compose-onto-
+existing — DONE (2026-06-13), committed (1b732ae), pending the human browser
+confirm above.** Built via a 5-phase workflow; 8 high/med review bugs fixed.
+tsc + vite build green (193 kB bundle).
 
 Key frontend changes: new `usePanZoom.ts` (pointer events, ctrl/pinch zoom,
 drag-pan, clamp 0.2–2.5×, Fit/recenter, ResizeObserver, StrictMode-safe);
@@ -123,6 +136,57 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **D3 — deterministic isometric projection — DONE & eyeball-verified
+  (2026-06-13, branch drawing-quality-d3; ruff+mypy clean, 482 tests
+  (+46: 35 isometric, 11 d3_solids), latency p95 0.132 ms unchanged).**
+  The LLM now reasons only about axis-aligned 3D PLACEMENT; the code does the
+  exact 30° projection — the relations.py/extrude.py "model proposes, code
+  disposes" pattern applied to volumetric 3D. "a 3D engine with pistons" now
+  renders as a coherent isometric assembly (was an exploded flat layout).
+  - **DESIGN DIVERGENCE from plan.md §11 D3 (flagged per CLAUDE.md §7, does
+    NOT change the queue):** plan said "the *renderer* does the projection".
+    Built instead as a pure DOMAIN transform that projects solids to a flat
+    GROUP of polygon/ellipse/path parts — because the codebase already
+    establishes that pattern (extrude.py, make_isometric.py) and both renderers
+    + the engine/replay/wire-contract already handle GROUPs. Net: **zero
+    renderer changes, zero client TS changes**, projection written ONCE in
+    Python. The plan's spirit (deterministic, pure, cached, LLM does no
+    projection math) is fully honored; only the layer differs.
+  - **`backend/quorum/domain/isometric.py`** (NEW, pure, Sonnet subagent):
+    `Solid(shape,x,y,z,w,d,h,color,name)` dataclass + `project_solids(Sequence[
+    Solid]) -> GeometrySpec|None`. Box/wedge → faces enumerated as 3D polygons,
+    culled by `outward_normal · (1,1,1) > 0`, projected (`sx=(x-z)cos30`,
+    `sy=(x+z)sin30-y`; world y is UP), shaded by normal orientation (L=0.80 top
+    / 0.55 front / 0.40 side / 0.22 stroke, sat floor 0.18, gray default
+    #9ca3af), z-sorted globally by world-centroid·(1,1,1) ascending (far first).
+    Cylinder → body PATH (sides + bottom half-ellipse) + top ELLIPSE.
+    Everything centered+scaled into [8,92] (fit ported from make_isometric).
+  - **`backend/quorum/pipeline/llm.py`**: `_SolidSpec` model + `_LLMPayload.
+    solids` (transient — projected in `payload_to_op` before the op leaves the
+    stage, so engine/replay/renderers see only the flat GROUP); solids clamp in
+    `_parse_and_repair`; prompt gains a "TRUE 3D — PREFER solids" rule + schema
+    line + worked **Example J** (3D engine = block box + 3 piston cylinders);
+    Example E re-marked as the hand-drawn FALLBACK (was contradicting the new
+    rule for "a 3D cube").
+  - **3-lens adversarial review (workflow, 3 Sonnet agents) found 9 issues; the
+    real ones fixed + pinned by regression tests:** (HIGH) `snap_relations`
+    must be SKIPPED for projected solids — its `inside`/`within` snap was
+    yanking a cylinder cap into the body (`from_solids` guard); (HIGH) the
+    60-part cap truncation kept the FARTHEST faces — now drops whole far CHUNKS
+    so the NEAREST survive and cylinder body/top pairs never split; (MED)
+    cylinder screen radii were missing a √2 factor (29% too narrow) — projected
+    circle x-semi-axis is r·√2·cos30; (MED) modify+solids now pins
+    target_node_id to focus (mirrors the patch branch); (MED) deleted dead
+    `_scale_path_str`; (LOW) log when geometry+solids both sent. Skipped (out of
+    scope, documented): shared cylinder z-key only mis-orders partial-
+    interpenetration arrangements we don't support.
+  - **Eyeball gate (`scripts/render_d3.py` → SVG+PNG via qlmanage):** cube
+    (3 shaded faces), engine (pistons on block, depth-sorted), wedge (ramp),
+    cylinder (foreshortened top), 3-box stack (cross-solid z-sort) — all ✓,
+    re-verified after the √2 cylinder fix.
+  - No classifier change needed: 3D intent already escalates to the LLM (D1),
+    which now has the `solids` tool; named-shape extrude (N4-B) and the
+    isometric template bank still serve the rules/template paths.
 - **§15 — UI canvas zoom/pan/adaptive + compose-onto-existing — DONE
   (2026-06-13, branch ui-zoom-adaptive-canvas; tsc + vite build 193 kB,
   436 tests, ruff+mypy clean, pytest 0.53 s).** 5-phase workflow: design
@@ -843,12 +907,20 @@ _(append-only-ish; newest at top)_
      above the horse" — the box should land as a child of the horse node with
      a compose-MODIFY, not a standalone new node.
    Then commit and merge ui-zoom-adaptive-canvas → main.
-0. **Resume drawing-quality D3→D5** (D1/D2 done) — full steps in §2, design
-   intent in plan.md §11. D3 = deterministic isometric projection
-   (box/cylinder/wedge IR; renderer does the math).
-1. **Resume point after that: Drawing Quality D3→D5** (D1/D2 done) — full
-   steps in §2, design intent in plan.md §11. D3 = deterministic isometric
-   projection (box/cylinder/wedge IR; renderer does the math).
+0. [x] **D3 — deterministic isometric projection — DONE (2026-06-13).** See §3
+   top entry. `domain/isometric.py` + LLM `solids` payload; eyeball-verified.
+1. **Resume point: Drawing Quality D4→D5** (D1/D2/D3 done) — full steps in §2's
+   numbered list above and plan.md §11. **D4 = adherence eval + tiered models**:
+   extend `eval_llm.py` to score instruction adherence (counts/colors/
+   coherence + now 3D solids coherence), benchmark GLM-5 / Kimi K2.5 /
+   Cerebras-hosted Qwen3 & gpt-oss, wire a streamed escalation tier (Gemini 3
+   Flash / Sonnet 4.6) for intricate/3D prompts. ⚠️ Groq quota was dead
+   2026-06-12 (70b + scout) — D4 should pick up the user's offered extra keys.
+   **D3 LIVE-PROBE STILL OWED:** with a working LLM key, drive "a 3D engine with
+   pistons" / "make this 3D" through the real Groq path (probe_llm.py) to
+   confirm the model actually emits `solids` and the projection lands — so far
+   only the deterministic projection is eyeball-verified, not the model's use
+   of the new tool. D5 (optional) = render→VLM-critique→repair polish.
 2. [x] **Live-mic review** — DONE (see §3). Finding: needs richer geometry.
 3. [x] **Richer geometry — DONE via LLM stage C (tier B).** Stage turned ON
    (Groq) + prompt teaches polygon/path/text; verified live (see §3).
@@ -932,6 +1004,9 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-13 | Radial mind-map uses a **UNIFORM ring step** (`kidRadius = R`, one card + ~60px gap); never compound radius with depth | `childDepth*R` made each successive iteration hop's edge longer than the last (0,R,3R,7R) — "line across too big" (user report). Uniform step + zoom/fit handles density. |
 | 2026-06-13 | Canvas pan/zoom is **hand-rolled (zero deps)** and is LOCAL VIEW state (RULES.md §4 — not authoritative session state); imperative pointer/wheel listeners with `{passive:false}` | React's synthetic `onWheel` is passive so `preventDefault` can't be called on it; a local transform is not session state and must not flow through the engine. No external pan/zoom library — avoids bundle bloat and dependency lock-in. |
 | 2026-06-13 | **Compose-onto-existing** = DETERMINISTIC placement (code proposes AND disposes), conf-0.8 rules fast path, modifiers=[] pre-baked, targets the RESOLVED named node (not just focus); over-trigger guards keep plain/multi-shape create intact | Quota-resilient (Groq often 429-dead) and "a box above the horse" must extend the horse, not spawn a standalone node. Deterministic `place_relative` matches the model-proposes-code-disposes pattern used throughout. |
+| 2026-06-13 | **D3 true-3D = project to a flat GROUP in the DOMAIN, not in the renderer** (plan.md §11 D3 said "renderer does it"). LLM emits transient `solids` (box/cylinder/wedge, x,y,z,w,d,h); `domain/isometric.project_solids` does the 30° projection→shading→cull→z-sort→fit, producing polygon/ellipse/path parts | Both renderers + engine/replay/wire already handle GROUPs (the extrude.py / make_isometric.py precedent), so a domain transform = ZERO renderer/client changes and the projection written ONCE. Plan's spirit (deterministic, pure, cached, LLM does no math) fully honored; only the layer differs. Flagged per CLAUDE.md §7 — does NOT reorder the queue |
+| 2026-06-13 | **Projected 3D bypasses `snap_relations`** (`from_solids` flag in `payload_to_op`) | A 3D utterance with "inside/within/in it" made `_snap_all_inside` treat the cylinder's top-cap (the last part) as "newly added" and yank it into the body — silent corruption. The projection is already exact; relation-snapping is for LLM-placed parts, not code-projected ones (adversarial-review HIGH find) |
+| 2026-06-13 | **Isometric circle projects with a √2 factor**: screen semi-axes = r·√2·cos30 and r·√2·sin30 | The projected horizontal circle's extrema are at cos t ∓ sin t = ±√2; dropping √2 (first cut did) made every cylinder 29% too narrow. Math, not taste — the same "code does the arithmetic" principle as tangency/extrusion (adversarial-review MED find, pinned by test) |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -965,7 +1040,7 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 | Classify (LLM) | <1.5 s local / <0.8 s Groq | scene create ~1.0/1.8 s; **scene-edit PATCH ~1.2–1.5 s live** (scout); full restyle re-emission ~3.5–5.5 s | ON. Patch edits (add/set/remove parts) are ~3x faster than full re-emission — most §13 edits are patches; many follow-ups (recolor, part size, extrusion) never reach the LLM at all |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
 | Engine apply | (internal) | **0.05 ms / 0.06 ms** | DAG mutation + event append; modify creates + renders a child node (§12); §14 undo = focus move only |
-| **End-to-end (server fast path)** | **<5 s** | **0.090 ms / 0.128 ms** | classify+engine+render. §14 re-measure: p95 0.178→0.128 ms (undo's branch-0 is one regex; run-to-run variance dominates); ~39,000x under budget |
+| **End-to-end (server fast path)** | **<5 s** | **0.093 ms / 0.132 ms** | classify+engine+render. D3 adds NOTHING to the fast path (true-3D `solids` projection lives in the LLM stage; `payload_to_op` projects once, ~sub-ms, off the hot path); p95 0.128→0.132 ms is run-to-run variance; ~38,000x under budget |
 
 > Read-back: the server-side fast path stays ~4 orders of magnitude under the
 > 5 s budget. The real human-perceived latency now has two contributors: the
