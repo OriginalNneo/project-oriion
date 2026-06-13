@@ -72,6 +72,11 @@ export function ParticipantView({ socket, speakerId }: { socket: QuorumSocket; s
     setText("");
   };
 
+  // Undo: sends the literal text 'undo' — engine maps it to OpType.UNDO.
+  const undo = () => {
+    socket.send({ type: "utterance", speaker_id: speakerId, text: "undo" });
+  };
+
   return (
     <div className="participant">
       <header className="bar">
@@ -83,75 +88,90 @@ export function ParticipantView({ socket, speakerId }: { socket: QuorumSocket; s
         </span>
       </header>
 
+      {/* Controls: outer .controls is full-width; inner .controls-inner is capped at 680px
+          so the voice/say/shape UI stays readable on wide screens, but .tree-wrap is a
+          sibling of .controls (not inside .controls-inner) so it spans full width. */}
       <section className="controls">
-        <div className="voice-row">
-          <button
-            className={`mic${listening ? " on" : ""}`}
-            onClick={toggleMic}
-            disabled={!voiceSupported}
-            title={voiceUnavailable ?? "toggle voice input"}
-          >
-            {listening ? "● listening — tap to stop" : "🎤 Speak"}
-          </button>
-          <span className="interim">
-            {voiceError
-              ? voiceError
-              : interim
-                ? `“${interim}…”`
-                : listening
-                  ? "say a shape, a change, or a preference"
-                  : (voiceUnavailable ?? "")}
-          </span>
-        </div>
-
-        <div className="say">
-          <input
-            value={text}
-            placeholder='Say or type: "a red circle", "make it bigger", "go with the triangle"…'
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && say()}
-          />
-          <button onClick={say}>Send</button>
-        </div>
-
-        <details className="manual">
-          <summary>manual shape buttons</summary>
-          <div className="row">
-            <label className="toggle">
-              <input type="checkbox" checked={fillet} onChange={(e) => setFillet(e.target.checked)} />
-              fillet / rounded
-            </label>
+        <div className="controls-inner">
+          <div className="voice-row">
+            <button
+              className={`mic${listening ? " on" : ""}`}
+              onClick={toggleMic}
+              disabled={!voiceSupported}
+              title={voiceUnavailable ?? "toggle voice input"}
+            >
+              {listening ? "● listening — tap to stop" : "🎤 Speak"}
+            </button>
+            <span className="interim">
+              {voiceError
+                ? voiceError
+                : interim
+                  ? `"${interim}…"`
+                  : listening
+                    ? "say a shape, a change, or a preference"
+                    : (voiceUnavailable ?? "")}
+            </span>
           </div>
-          <div className="shape-grid">
-            {SHAPES.map((s) => (
-              <div key={s.kind} className="shape-cell">
-                <button onClick={() => create(s.kind)}>{s.label}</button>
-                <button className="ghost" disabled={!focusNodeId} onClick={() => branch(s.kind)}>
-                  branch
-                </button>
-              </div>
-            ))}
+
+          <div className="say">
+            <input
+              value={text}
+              placeholder='Say or type: "a red circle", "make it bigger", "go with the triangle"…'
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setText(e.target.value)}
+              onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => e.key === "Enter" && say()}
+            />
+            <button onClick={say}>Send</button>
+            {/* Undo button — sends 'undo' utterance; engine maps to OpType.UNDO */}
+            <button className="btn-undo" onClick={undo} title="Undo last change">
+              ↩ Undo
+            </button>
           </div>
-        </details>
+
+          <details className="manual">
+            <summary>manual shape buttons</summary>
+            <div className="row">
+              <label className="toggle">
+                <input type="checkbox" checked={fillet} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFillet(e.target.checked)} />
+                fillet / rounded
+              </label>
+            </div>
+            <div className="shape-grid">
+              {SHAPES.map((s) => (
+                <div key={s.kind} className="shape-cell">
+                  <button onClick={() => create(s.kind)}>{s.label}</button>
+                  <button className="ghost" disabled={!focusNodeId} onClick={() => branch(s.kind)}>
+                    branch
+                  </button>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
       </section>
 
+      {/* tree-wrap: full-bleed, flex:1, no overflow:auto so the pan layer is the
+          only scroll mechanism. min-height:0 is critical for flex shrink. */}
       <section className="tree-wrap">
         <IdeaTree />
       </section>
 
-      <section className="transcript">
-        <h4>What the system heard</h4>
-        <ul>
-          {transcript
-            .slice(-6)
-            .reverse()
-            .map((l) => (
-              <li key={l.utteranceId}>
-                <b>{l.speakerId}:</b> {l.text}
-              </li>
-            ))}
-        </ul>
-      </section>
+      {/* Transcript as a collapsible drawer — capped open height so it never
+          permanently eats 28% of the view. Default open. */}
+      <details className="transcript-drawer" open>
+        <summary>What the system heard</summary>
+        <div className="transcript-body">
+          <ul>
+            {transcript
+              .slice(-6)
+              .reverse()
+              .map((l) => (
+                <li key={l.utteranceId}>
+                  <b>{l.speakerId}:</b> {l.text}
+                </li>
+              ))}
+          </ul>
+        </div>
+      </details>
     </div>
   );
 }

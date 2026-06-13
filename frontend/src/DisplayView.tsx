@@ -1,6 +1,8 @@
 // Display view — the HDMI'd screen. View-only, fullscreen, minimal chrome,
 // calm and big (plan.md §7: "Display view ≠ participant view"). No controls;
 // it only reflects broadcast state.
+// .display-stage is full-bleed (no grid centering, padding:0, overflow:hidden)
+// so IdeaTree fills it completely and auto-fits via its pan/zoom layer.
 
 import { useStore } from "./store";
 import { IdeaTree } from "./IdeaTree";
@@ -20,6 +22,8 @@ export function DisplayView() {
         <span className={`dot ${connected ? "on" : "off"}`} />
       </header>
 
+      {/* Full-bleed: centering removed, padding:0, overflow:hidden — IdeaTree
+          fills this via transform-based pan/zoom (see .display-stage in styles.css) */}
       <main className="display-stage">
         <IdeaTree big />
       </main>

@@ -35,6 +35,13 @@
 >   part-scoped ask, quota-fragile LLM-only flows). Research (JSON Whisperer,
 >   SVGenius/SVGEditBench, aider diff benchmarks) backs an edit-as-PATCH
 >   contract over full scene re-emission.
+> - 2026-06-13 — added §15 (UI canvas zoom/pan/adaptive + compose-onto-existing).
+>   Reason: §14 identified two remaining UX gaps — (a) the mind-map canvas had no
+>   zoom/pan and cards became unreachable as the map grew; (b) "draw a box above the
+>   horse" created a standalone node instead of composing onto the horse. The
+>   full canvas REDESIGN remains gated on the user's pending design reference
+>   (noted in §14); §15 is the interim layout-preserving zoom/adaptive pass plus
+>   a layout bug fix (depth-compounding radial spacing), not that redesign.
 
 ---
 
@@ -671,3 +678,49 @@ move); the viewport fix is client-side. Nothing blocks on a key.
 on the plain hexagon (pink child still visible) → "make it blue" → NEW
 sibling child, blue; "undo" at the root does nothing; the focused card is
 always scrolled into view. All §12/§13 e2e steps unregressed; latency green.
+
+---
+
+## 15. UI canvas zoom/pan/adaptive + compose-onto-existing (2026-06-13)
+
+### The user intent (live §14 feedback + UX gaps)
+1. **The canvas is too cramped.** As the mind-map grows, cards overflow the
+   fixed scroll area and become unreachable; there is no way to zoom out or
+   pan freely.
+2. **A spatial utterance creates a standalone node instead of extending the
+   target.** "Draw a horse" → "draw a box above the horse" produced a new
+   standalone box node. The intent is to compose the box onto the horse as a
+   child iteration.
+3. The earlier §14 note that the **full canvas redesign is GATED on the
+   user's design reference** still holds — §15 is the interim, layout-
+   preserving zoom/adaptive pass plus a layout bug fix, not that redesign.
+
+### What shipped (2026-06-13)
+**Frontend — canvas zoom/pan/adaptive + focus-follow (tsc + vite build green,
+193 kB bundle; 8 review bugs caught and fixed via 5-phase workflow):**
+- `usePanZoom.ts` (hand-rolled, zero deps): pointer events; ctrl/meta-wheel +
+  2-pointer pinch zoom-about-cursor; plain-wheel pan; drag-pan; clamp
+  0.2–2.5×; Fit/auto-fit/recenter; ResizeObserver; StrictMode-safe.
+- `ZoomControls.tsx`: −/%/+/Fit/Recenter/Follow toggle.
+- `IdeaTree.tsx`: `.idea-scroll > .idea-viewport(CSS transform) > .idea-canvas`;
+  focus-follow pauses while gesturing; "sketching…" badge. **Fixed radial
+  depth-compounding bug** (uniform ring step `kidRadius = R`; ring tightened
+  from ~288 px to `max(cw,ch)+60`).
+- `styles.css`: full-bleed map (overflow:hidden + transform pan replaces the
+  grid overflow-clip that made large maps unreachable); transcript →
+  collapsible `<details>` drawer.
+
+**Backend — compose-onto-existing (deterministic; quota-resilient; 436 tests,
++43; ruff+mypy clean; pytest 0.53 s):**
+- `domain/compose.py` (new, pure): `place_relative(target, new_part, relation)`
+  → flat GROUP fit to the 0..100 box; relations above/below/left/right/
+  on_top/behind/inside; z-order; 60-part limit guard.
+- `classify.py` branch 5b: "[create/draw/add/put/place] a <shape> <spatial
+  relation> the <existing node>" → compose-MODIFY of the RESOLVED target node
+  (conf 0.8, source=rules, modifiers=[]); engine branches a child (§12-R1).
+  Over-trigger guards keep plain/multi-shape create and recolor intact.
+
+### Pending
+Human browser confirm on branch ui-zoom-adaptive-canvas (servers live :8000 /
+:5173), then commit and merge. The design-reference-gated canvas redesign
+remains open for a future §16 program.
