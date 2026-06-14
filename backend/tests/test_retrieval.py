@@ -7,7 +7,11 @@ exercised by the live probe.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 from collections.abc import Sequence
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -111,3 +115,180 @@ async def test_references_respect_top_k(k: int) -> None:
     # "a snowman" is close to snowman (1.0) and orthogonal to rocket (0, dropped by
     # min-sim), so at most one clears the bar regardless of k.
     assert len(await r.references("a snowman")) <= k
+
+
+# --- startup warming: index_references must be idempotent ------------------- #
+async def test_index_references_is_idempotent() -> None:
+    # The startup warm and the lazy first-utterance fallback can both call this;
+    # without the idempotent guard a second build would APPEND the bank twice.
+    r = SemanticRetrieval(StubEmbedder(), top_k=2)
+    items = [("snowman", _spec("snowman")), ("rocket", _spec("rocket"))]
+    r.index_references(items)
+    r.index_references(items)  # second call must be a no-op, not a re-append
+    assert len(r._ref_specs) == 2  # the invariant: built once, not appended twice
+    refs = await r.references("a snowman")
+    assert len(refs) == 1  # snowman once, not duplicated
+
+
+def test_index_references_empty_still_marks_indexed() -> None:
+    r = SemanticRetrieval(StubEmbedder())
+    r.index_references([])
+    assert r.indexed  # so the lazy fallback won't keep retrying an empty bank
+
+
+# --- cache persistence ----------------------------------------------------- #
+async def test_cache_persists_and_reloads(tmp_path: Path) -> None:
+    path = tmp_path / "cache.json"
+    r1 = SemanticRetrieval(StubEmbedder(), cache_threshold=0.94, model_id="stub", cache_path=path)
+    await r1.remember("a snowman", _spec("snowman"))
+    await r1.flush()  # the write is backgrounded — wait for it
+    assert path.exists()  # remember() persisted it
+
+    # A fresh process (new instance) restores the cache from disk.
+    r2 = SemanticRetrieval(StubEmbedder(), cache_threshold=0.94, model_id="stub", cache_path=path)
+    assert r2.load_cache() == 1
+    hit = await r2.cached("draw a snowman")  # cosine 0.99 with "a snowman"
+    assert hit is not None and hit.name == "snowman"
+
+
+async def test_cache_no_path_does_not_persist(tmp_path: Path) -> None:
+    # Default (cache_path=None) keeps the in-memory-only behavior — no file ever.
+    r = SemanticRetrieval(StubEmbedder(), model_id="stub")
+    await r.remember("a snowman", _spec("snowman"))
+    assert os.listdir(tmp_path) == []  # os, not pathlib, to satisfy ASYNC240
+
+
+async def test_cache_load_rejects_foreign_model(tmp_path: Path) -> None:
+    path = tmp_path / "cache.json"
+    r1 = SemanticRetrieval(StubEmbedder(), model_id="model-a", cache_path=path)
+    await r1.remember("a snowman", _spec("snowman"))
+    await r1.flush()
+    # A cache written by a different embedding model is meaningless cosine-wise.
+    r2 = SemanticRetrieval(StubEmbedder(), model_id="model-b", cache_path=path)
+    assert r2.load_cache() == 0
+    assert await r2.cached("draw a snowman") is None
+
+
+def test_cache_load_missing_file_is_empty(tmp_path: Path) -> None:
+    r = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=tmp_path / "nope.json")
+    assert r.load_cache() == 0
+
+
+async def test_cache_load_corrupt_file_is_empty_and_still_works(tmp_path: Path) -> None:
+    path = tmp_path / "cache.json"
+    path.write_text("{not valid json", encoding="utf-8")
+    r = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    assert r.load_cache() == 0  # degrades, doesn't raise
+    # ...and the instance is still fully functional after a bad load.
+    await r.remember("a snowman", _spec("snowman"))
+    assert await r.cached("draw a snowman") is not None
+    await r.flush()
+
+
+def test_cache_load_skips_wrong_version(tmp_path: Path) -> None:
+    path = tmp_path / "cache.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 999,
+                "model": "stub",
+                "vectors": [[1.0, 0.0, 0.0, 0.0]],
+                "specs": [_spec("snowman").model_dump_json()],
+            }
+        ),
+        encoding="utf-8",
+    )
+    r = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    assert r.load_cache() == 0
+
+
+def test_cache_load_skips_length_mismatch(tmp_path: Path) -> None:
+    path = tmp_path / "cache.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model": "stub",
+                "vectors": [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]],
+                "specs": [_spec("snowman").model_dump_json()],  # 1 spec vs 2 vectors
+            }
+        ),
+        encoding="utf-8",
+    )
+    r = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    assert r.load_cache() == 0
+
+
+async def test_cache_persist_survives_multiple_remembers(tmp_path: Path) -> None:
+    path = tmp_path / "cache.json"
+    r1 = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    await r1.remember("a snowman", _spec("snowman"))
+    await r1.remember("a rocket", _spec("rocket"))
+    await r1.flush()
+    r2 = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    assert r2.load_cache() == 2
+    assert (await r2.cached("a rocket")) is not None
+    assert (await r2.cached("a snowman")) is not None
+
+
+# --- load_cache must never raise on a bad/tampered file (review fixes) ------- #
+@pytest.mark.parametrize("body", ["null", "[1, 2, 3]", "42", '"a string"'])
+def test_cache_load_skips_non_object_json(tmp_path: Path, body: str) -> None:
+    # Valid JSON that isn't our {version, model, ...} object must degrade, not
+    # raise AttributeError on raw.get(...).
+    path = tmp_path / "cache.json"
+    path.write_text(body, encoding="utf-8")
+    r = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    assert r.load_cache() == 0
+
+
+def test_cache_load_skips_malformed_vectors(tmp_path: Path) -> None:
+    # Non-numeric vector elements make np.asarray raise TypeError, not ValueError.
+    path = tmp_path / "cache.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model": "stub",
+                "vectors": [{"not": "a number"}],
+                "specs": [_spec("snowman").model_dump_json()],
+            }
+        ),
+        encoding="utf-8",
+    )
+    r = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    assert r.load_cache() == 0  # honored "never raises" contract
+
+
+def test_cache_load_skips_wrong_rank_vectors(tmp_path: Path) -> None:
+    # A flat (1-D) vectors array would later make query() raise IndexError; reject
+    # it at load instead so a tampered file can't crash a request.
+    path = tmp_path / "cache.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model": "stub",
+                "vectors": [1.0, 0.0, 0.0, 0.0],  # flat, not a list-of-vectors
+                "specs": [_spec("snowman").model_dump_json()],
+            }
+        ),
+        encoding="utf-8",
+    )
+    r = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    assert r.load_cache() == 0
+
+
+async def test_concurrent_remembers_all_persist(tmp_path: Path) -> None:
+    # Two novel CREATEs fired together (the shared process-wide singleton case):
+    # the persist lock must serialize the writes so BOTH survive a restart — the
+    # pre-fix shared-.tmp race could let an older 1-entry snapshot win.
+    path = tmp_path / "cache.json"
+    r1 = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    await asyncio.gather(
+        r1.remember("a snowman", _spec("snowman")),
+        r1.remember("a rocket", _spec("rocket")),
+    )
+    await r1.flush()
+    r2 = SemanticRetrieval(StubEmbedder(), model_id="stub", cache_path=path)
+    assert r2.load_cache() == 2

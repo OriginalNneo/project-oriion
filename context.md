@@ -5,7 +5,7 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-13  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo · compose-onto-existing**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, §14 voice undo + viewport follow, §15 canvas zoom/pan/adaptive + compose-onto-existing, AND D3 deterministic isometric projection — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **568 backend tests** (+87 D4: adherence+openrouter), latency p95 0.129 ms (unchanged). **D4 part 1 — instruction-adherence eval harness + OpenRouter backend + cheap-tier benchmark — DONE; D3 live-probe DONE (model emits `solids`, projection lands).** Next: D4 part 2 (escalation tier + streamed fast tier); still-pending human browser confirm of §15 + merges to main (plan.md §11).
+> **Last updated:** 2026-06-14  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo · compose-onto-existing**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → **embeddings tier (semantic few-shot refs + persistent near-duplicate CREATE cache, warmed at startup)** → LLM (gemini-2.5-flash-lite via OpenRouter; **set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12–§15, D3 isometric projection, D4 part 1 adherence eval, detection-accuracy fixes, AND the embeddings tier + its follow-ups (warm-at-startup, persistent cache) — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **596 backend tests**, fast path p95 sub-ms (unchanged). Next: still-pending human browser confirm of §15 + merges to main (plan.md §11); D4 part 2 (escalation tier) optional.
 
 ---
 
@@ -26,8 +26,21 @@ backend tests**, tsc, vite build 193 kB); fast path p95 sub-ms; pending human
 browser confirm of §15 on branch ui-zoom-adaptive-canvas.
 
 ## 2. Current focus
-**Detection-accuracy + speed enhancements — DONE & live-verified (2026-06-14,
-branch drawing-quality-d3, committed 63e917c).** User feedback: "it's doing
+**Embeddings follow-ups — startup index warming + persistent CREATE cache —
+DONE & live-verified (2026-06-14, branch drawing-quality-d3).** Closes the two
+non-blocking follow-ups left by the embeddings tier (c344d1e): the 345-template
+reference index now warms in a background lifespan task (instant startup, no
+~3-4 s first-utterance penalty; required making `index_references` idempotent +
+thread-safe so it can't double the index racing the lazy fallback), and the
+near-duplicate CREATE cache now persists to disk (`QUORUM_RETRIEVAL_CACHE_PATH`,
+model-keyed, never-raises load) so a restart keeps the room's drawings.
+Main-thread build → 3-lens adversarial review (8 findings fixed: a concurrent
+`.tmp` write race, a classify-return latency stall, three `load_cache`
+crash-on-tampered-file paths, and silent warm-task failures). 596 tests,
+ruff+mypy clean, fast path unchanged. Full record in §3 (top).
+
+**Prior — Detection-accuracy + speed enhancements — DONE & live-verified
+(2026-06-14, committed 63e917c).** User feedback: "it's doing
 nicely; enhance detection (new shapes sometimes focus the OLD shape; placement
 ~20% accurate → want ~85%), speed, and UX (defer UX)." Fixed: (1) every CREATE
 now takes focus (was: only the first ever) — the "edits the old shape" bug; (2)
@@ -37,9 +50,10 @@ shape can't hijack an old node; (4) default model → `google/gemini-2.5-flash-l
 (~2 s AND strong on color/placement/3D — bake-off winner). All live-verified.
 570 tests, fast path p95 0.119 ms. Full record in §3 (top).
 
-**Next:** (a) **vector DB** — semantic reference retrieval + utterance→geometry
-cache (the user's idea; design in §4, propose-before-build since it adds a dep); (b) still pending (human-only): the **§15 browser confirm + merges
-to main**; (c) D4 part 2 (escalation tier) is now largely moot for latency since
+**Next:** (a) the **vector DB / embeddings tier is now fully landed** — tier
+shipped (c344d1e) AND both follow-ups (warm-at-startup + persistent cache) done;
+(b) still pending (human-only): the **§15 browser confirm + merges to main**;
+(c) D4 part 2 (escalation tier) is now largely moot for latency since
 gemini-2.5-flash-lite is ~2 s — keep it only as a quality-escalation option.
 UX/UI polish DEFERRED by the user.
 
@@ -169,6 +183,51 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Embeddings follow-ups: startup index warming + persistent CREATE cache —
+  DONE & live-verified (2026-06-14, branch drawing-quality-d3; 596 tests
+  (+7 over the 589 baseline; +17 over 579), ruff+mypy clean (40 files), fast
+  path unchanged).** Closes the two non-blocking follow-ups the embeddings tier
+  (c344d1e) left open. Implemented on the main thread (tightly coupled in
+  `retrieval.py` + a thread-safety judgment call), then a 3-lens adversarial
+  review workflow (concurrency / persistence-integrity / latency-regression) on
+  Sonnet → 8 confirmed findings fixed + regression-pinned.
+  - **Startup index warming (`app.py`):** the 345-template semantic reference
+    index now warms in a BACKGROUND task in the lifespan (no-op unless
+    retrieval=local), so startup stays instant (healthz serves immediately) but
+    the index is ready before the first utterance — kills the old ~3-4 s
+    first-utterance penalty. The lazy fallback in `llm.py::_retrieve` stays as a
+    safety net.
+  - **The race fix that MAKES warming safe (`retrieval.py`):** `index_references`
+    was append-only and only set `_indexed=True` at the end, so a background warm
+    racing the lazy fallback would have DOUBLED every reference. Now idempotent +
+    thread-safe under a `threading.Lock` (first caller builds; all others — even
+    concurrent — no-op).
+  - **Persistent near-duplicate CREATE cache (`retrieval.py` + `settings.py`):**
+    the cache (utterance vectors + `GeometrySpec`s) now persists to
+    `retrieval_cache_path` (new setting; `QUORUM_RETRIEVAL_CACHE_PATH=.quorum_cache/
+    retrieval_cache.json` in `.env`, gitignored) so a restart keeps drawings the
+    room already produced. Keyed by embedding `model_id` + a format version; a
+    foreign-model/stale/corrupt/ragged file degrades to an EMPTY cache, never
+    crashes startup (`load_cache` "never raises" contract). Restored once per
+    process via the `get_retrieval` singleton; default path None = byte-identical
+    to the old in-memory-only behavior.
+  - **Review fixes (all real, pinned by tests):** (MED ×2) concurrent
+    `remember()` across rooms shared one `.tmp` path → older snapshot could win /
+    torn write → newest CREATE lost on restart — fixed with an `asyncio.Lock`
+    serializing writes in creation order (snapshot taken synchronously on the
+    loop, so mutation order = task order = write order → newest lands last);
+    (MED) the `await` on the disk write delayed `classify()` return — now
+    FIRE-AND-FORGET via a tracked background task (`flush()` added for tests +
+    graceful shutdown); (MED ×2 + LOW) `load_cache` could raise
+    AttributeError/TypeError/IndexError on tampered/non-dict/ragged JSON →
+    isinstance guard + explicit 2-D shape check + broadened except; (LOW ×2) the
+    warm task's exception only surfaced via asyncio's GC warning → wrapped in
+    try/except logging through the structured logger.
+  - **Live-verified with the real MiniLM embedder:** concurrent remembers both
+    persist (lock holds), simulated restart reloads both + exact-utterance reuse
+    hits, foreign-model + corrupt-`null` files both degrade to 0 cleanly.
+    Confirmed NO hidden model/network dependency added to CI (integration tests
+    use `TestClient(app)` without the `with` context, so lifespan never fires).
 - **Embeddings tier (the "vector DB"): semantic references + near-duplicate
   cache — DONE & live-verified (2026-06-14, branch drawing-quality-d3, committed
   c344d1e; 579 tests, ruff+mypy clean, fast path unchanged).** The user's idea;
