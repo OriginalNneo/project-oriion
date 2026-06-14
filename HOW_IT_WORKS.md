@@ -149,7 +149,9 @@ Anything the rules/templates can't confidently handle escalates to the LLM (stag
                                                   │  Classifier CASCADE                  │
                                                   │   A. rules     (vocabulary, instant) │
                                                   │   B. templates (QuickDraw/isometric) │
-                                                  │   C. LLM        (OpenRouter, novel)  │
+                                                  │   C. LLM (OpenRouter, novel) wrapped  │
+                                                  │      by the embeddings tier: a cache  │
+                                                  │      hit skips it; else semantic refs │
                                                   └─────────────────┬───────────────────┘
                                                                     │ DesignOp
                                                           Design State Engine
@@ -174,6 +176,10 @@ Key design ideas (all live):
   produces a `DesignOp`; the engine applies it and broadcasts a diff.
 - **Iteration-as-branch.** A change to an idea doesn't overwrite it — it creates a **child
   node** and moves focus there, so the canvas grows outward as a mind map and nothing is lost.
+  Every *new* idea (CREATE) also takes focus, so follow-ups apply to the shape you just made.
+- **Embeddings tier (optional; on now).** A near-identical repeat of a prior create reuses the
+  cached drawing and **skips the LLM** (instant); novel prompts get the closest known drawings
+  as **semantic** few-shot examples (not just keyword matches). Gated by `QUORUM_RETRIEVAL_BACKEND`.
 - **One WebSocket, server is the source of truth.** No side-channel fetches; late joiners get
   a full snapshot on connect, so opening a second tab is instantly in sync.
 
@@ -204,13 +210,18 @@ phones on the LAN can connect.
 ## 8. What's instant vs what's slow (set expectations)
 
 - **Instant (deterministic, no AI):** basic + named shapes, templates, recolor, resize,
-  2D→3D extrude, compose/placement, preferences, prune, connect, undo. Server fast-path is
-  **~0.13 ms p95** (the human-perceived delay here is just the browser's speech recognizer).
-- **Slower (LLM stage C):** novel scenes, open-ended restyle, true-3D solids, multi-shape
-  composition. **Currently routed to OpenRouter on the cheapest model** (`inclusionai/ling-2.6-flash`)
-  because the previous Groq key was rate-limited. The cheap tier is **5–70 s** and occasionally
-  rate-limits — so a slow "draw a horse" is the model tier, not a bug. (A fast escalation tier
-  is the next planned step — see `context.md` §4 / `plan.md` §11 "D4 part 2".)
+  2D→3D extrude, compose/placement (above/below/left/right/inside — now snapped exactly),
+  preferences, prune, connect, undo. Server fast-path is **~0.12 ms p95** (the human-perceived
+  delay here is just the browser's speech recognizer).
+- **LLM stage C (novel scenes, open-ended restyle, true-3D solids, composition):** routed to
+  OpenRouter **`google/gemini-2.5-flash-lite` — ~2 s** typical (picked by an adherence bake-off
+  for being fast *and* accurate on color/placement/3D; it replaced the cheapest `ling` model,
+  which was 5–70 s and weak).
+- **Instant on repeats (embeddings cache):** a near-identical repeat of a previous create
+  ("a medieval castle" said twice) is served from the semantic cache and **skips the LLM
+  entirely** (~0.01 s). One caveat: the **first novel prompt after a server restart** adds a
+  one-time ~3–4 s warm-up (it loads the embedding model + indexes the template bank), then
+  everything is fast.
 
 ---
 
@@ -219,13 +230,16 @@ phones on the LAN can connect.
 | Stage | Backend | Notes |
 |---|---|---|
 | Speech-to-text | **mock** (server) | The browser's Web Speech API does STT client-side in this phase. Needs Chrome/Safari + a secure context (`localhost` works; a phone on the raw LAN IP needs HTTPS or the text box). |
-| LLM (stage C) | **openrouter** | OpenAI-compatible; model `inclusionai/ling-2.6-flash`. Swappable via `QUORUM_OPENROUTER_MODEL`. |
+| LLM (stage C) | **openrouter** | OpenAI-compatible; model `google/gemini-2.5-flash-lite` (~2 s, accurate). Swappable via `QUORUM_OPENROUTER_MODEL`. |
+| Retrieval (embeddings tier) | **local** | sentence-transformers (`all-MiniLM-L6-v2`): semantic few-shot references + a near-duplicate CREATE cache. Off by default; on here via `QUORUM_RETRIEVAL_BACKEND=local`. |
 | VAD | **mock** | Server-side voice-activity detection is Phase 1b (not yet built). |
 
 What's built and verified: the full voice→sketch loop; compositional iteration (§12),
 part-level editing + in-chain 3D (§13), voice undo + viewport follow (§14), the zoom/pan/
-adaptive canvas + compose-onto-existing (§15), deterministic isometric projection (D3), and the
-instruction-adherence eval harness + model benchmark (D4 part 1). 568 backend tests pass.
+adaptive canvas + compose-onto-existing (§15), deterministic isometric projection (D3), the
+instruction-adherence eval harness + model benchmark (D4), the detection-accuracy fixes
+(new shapes take focus; deterministic directional placement), and the embeddings tier
+(semantic references + near-duplicate cache). **579 backend tests pass.**
 
 ---
 
@@ -250,12 +264,13 @@ Project Oriion/
 │       │                    #   extrude, compose, parts, events, op, tree, pathdata
 │       ├── engine/          # Design State Engine (sole writer, event-sourced, replay)
 │       ├── pipeline/        # the cascade: classify (rules), templates, llm (stage C),
-│       │                    #   relations, renderer, intent, interfaces
+│       │                    #   relations (placement snapping), embeddings + retrieval
+│       │                    #   (the vector-DB tier), renderer, intent, interfaces
 │       ├── eval/            # adherence.py — the D4 instruction-adherence scorer (no-VLM)
 │       ├── gateway/         # WebSocket connection, rooms, message handler
 │       └── observability/   # structured logging + the latency ledger
 │   ├── scripts/         # eval_llm, eval_adherence, probe_llm, e2e_check, make_isometric, …
-│   └── tests/           # 568 tests (unit + integration + latency harness)
+│   └── tests/           # 579 tests (unit + integration + latency harness)
 │
 └── frontend/            # React + Vite + rough.js (the two web UIs)
     └── src/
