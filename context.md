@@ -26,18 +26,38 @@ backend tests**, tsc, vite build 193 kB); fast path p95 sub-ms; pending human
 browser confirm of §15 on branch ui-zoom-adaptive-canvas.
 
 ## 2. Current focus
-**D4 part 1 — instruction-adherence eval + OpenRouter backend + cheap-tier
-benchmark — DONE (2026-06-13, branch drawing-quality-d3).** A pure, no-vision
-scorer (`quorum/eval/adherence.py`) grades count/color/coherence/relations/
-solids3d; a runner (`scripts/eval_adherence.py`) with a keyless `--self-test`
-benchmarks models. OpenRouter is now a swappable OpenAI-compatible backend (the
-active one — Groq was 429-dead). The owed D3 live probe is closed: the cheapest
-model emits `solids` and the projection renders a coherent isometric assembly.
-Benchmark + 5 adversarial-review fixes recorded in §3 (top). **Next segment =
-D4 part 2: an escalation tier (intent-routed stronger model) + streamed fast
-tier (≤2 s p95) — the cheap OpenRouter routes are 30–72 s p95, escalation-tier
-latency, so they don't replace the live default.** Still pending (human-only):
-the §15 browser confirm + merges to main (below).
+**Detection-accuracy + speed enhancements — DONE & live-verified (2026-06-14,
+branch drawing-quality-d3, committed 63e917c).** User feedback: "it's doing
+nicely; enhance detection (new shapes sometimes focus the OLD shape; placement
+~20% accurate → want ~85%), speed, and UX (defer UX)." Fixed: (1) every CREATE
+now takes focus (was: only the first ever) — the "edits the old shape" bug; (2)
+deterministic directional placement snapping (above/below/left/right/beside) —
+was raw model guesswork; (3) compose target resolves definite-only so a new
+shape can't hijack an old node; (4) default model → `google/gemini-2.5-flash-lite`
+(~2 s AND strong on color/placement/3D — bake-off winner). All live-verified.
+570 tests, fast path p95 0.119 ms. Full record in §3 (top).
+
+**Next:** (a) **vector DB** — semantic reference retrieval + utterance→geometry
+cache (the user's idea; design in §4, propose-before-build since it adds a dep); (b) still pending (human-only): the **§15 browser confirm + merges
+to main**; (c) D4 part 2 (escalation tier) is now largely moot for latency since
+gemini-2.5-flash-lite is ~2 s — keep it only as a quality-escalation option.
+UX/UI polish DEFERRED by the user.
+
+**Prior — D4 part 1 — instruction-adherence eval + OpenRouter backend + cheap-tier
+benchmark — DONE (2026-06-13).** Pure no-vision scorer
+(`quorum/eval/adherence.py`) grades count/color/coherence/relations/solids3d; a
+runner (`scripts/eval_adherence.py`) with a keyless `--self-test` benchmarks
+models. Closed the owed D3 live probe. Benchmark + 5 adversarial-review fixes in
+§3.
+
+**Prior — D3 — deterministic isometric projection — DONE & eyeball-verified
+(2026-06-13).** Branch: drawing-quality-d3 (off ui-zoom-adaptive-canvas, so it
+carries §15). LLM emits axis-aligned 3D `solids`; pure `domain/isometric.py`
+projects them to a flat isometric GROUP (model proposes, code disposes). 482
+tests, ruff+mypy clean, latency p95 0.132 ms (no regression). Built by one
+Sonnet subagent (the projection module) + main-thread LLM/prompt wiring, then a
+3-lens adversarial-review workflow (2 HIGH + 3 MED real bugs fixed & pinned).
+Eyeball gate ✓ (cube/engine/wedge/cylinder/stack). Full details + the
 
 **Prior — D3 — deterministic isometric projection — DONE & eyeball-verified
 (2026-06-13).** Branch: drawing-quality-d3 (off ui-zoom-adaptive-canvas, so it
@@ -149,6 +169,37 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Detection-accuracy fixes + fast/accurate model — DONE & live-verified
+  (2026-06-14, branch drawing-quality-d3; 570 tests, ruff+mypy clean, fast path
+  p95 0.119 ms; committed 63e917c).** Two live user-reported bugs, root-caused by
+  a read-only investigation subagent, fixed and reproduced live:
+  - **FOCUS BUG — "a new shape keeps editing the OLD shape."** `engine._create`
+    only moved focus to a new node when the canvas was EMPTY (`first = _focus_id
+    is None`), so every create after the first left focus on the prior node and
+    follow-ups ("make it bigger") hit it. Now EVERY create takes focus + demotes
+    the previous to ACTIVE (mirrors `_modify`; the demotion is an in-memory status
+    mutation, replay re-derives statuses from the final focus). Live:
+    circle→square→triangle each take focus. Regression-pinned incl. replay.
+  - **PLACEMENT ~20% → deterministic.** above/below/left/right/beside were NEVER
+    snapped — only inside/tangent were — so spatial placement was raw model
+    guesswork. New `relations._snap_all_directional` translates the newly-added
+    part(s) to the stated side of the host (shared `_partition_new` helper with
+    the inside snap; same "model proposes, code disposes" pattern). Live: "a box
+    above the horse" → box centre-y 21 vs horse 57 (ABOVE). Pinned (above +
+    beside). "on top of" is intentionally left to the compose on_top (overlap)
+    path, not directional snap.
+  - **Compose target hardened (#3):** classify.py branch 5b now resolves the
+    compose TARGET with `definite_only=True`, so an indefinite shape mention
+    ("a line above the horse") can't stem-match and hijack a fresh create into a
+    MODIFY of an existing "line" node.
+  - **Default model → `google/gemini-2.5-flash-lite`** (adherence bake-off
+    2026-06-14): ~2 s/call AND strong on color (blue car 1.0, yellow star 1.0),
+    placement (blue circle inside red square 1.0) and 3D — vs the cheapest 'ling'
+    (5-70 s, color 0.70, relations None/0). `gpt-5-nano` unusable (reasoning
+    model: 65 s, null content → BAD). Set in settings.py default AND .env.
+  - UX/UI polish bugs explicitly DEFERRED by the user ("down the road"); a vector
+    DB (semantic retrieval + result cache) proposed as the next speed/consistency
+    enhancement (§4).
 - **D4 (part 1) — instruction-adherence eval + OpenRouter backend + cheap-tier
   benchmark — DONE (2026-06-13, branch drawing-quality-d3; 568 tests (+87:
   85 adherence, 2 openrouter), ruff+mypy clean (38 files), fast path p95
@@ -988,15 +1039,24 @@ _(append-only-ish; newest at top)_
    (annotated set + keyless self-test) + OpenRouter backend; benchmark table +
    findings + 5 review fixes recorded. **D3 live-probe also DONE** (ling-2.6-flash
    emits `solids`; coherent isometric engine eyeballed).
-2. **Resume point: D4 part 2 — escalation tier + streamed fast tier.** The cheap
-   OpenRouter routes measured 30–72 s p95 (escalation-tier latency), so they
-   don't satisfy the ≤2 s fast-tier budget. Next: (a) wire intent-routed model
-   selection (a stronger model — e.g. Gemini 3 Flash / Sonnet 4.6 — for
-   3D/intricate-classified utterances) behind env config; (b) stream stage-C
-   output so the canvas animates while drawing; (c) keep/restore a sub-2 s fast
-   tier (Groq/Cerebras) for the common path. Reuse `eval_adherence.py` to gate
-   any model promotion (never swap a default on a benchmark we didn't run / on a
-   rate-limit-corrupted row). D5 (optional) = render→VLM-critique→repair polish.
+1b. [x] **Detection accuracy + speed — DONE & live-verified (2026-06-14).** See
+   §3 top + commit 63e917c. Focus-on-create fix, deterministic directional
+   placement snapping, definite-only compose target, and the gemini-2.5-flash-lite
+   model swap (~2 s). User goal "placement ~20%→85%, new shapes focus, faster" met.
+2. **Resume point: vector DB (semantic retrieval + result cache)** — the user's
+   speed/consistency idea. Design: (a) embed the utterance, retrieve the closest
+   known-good drawings as few-shot references (better detection); (b) an
+   utterance→geometry cache so a near-duplicate request reuses the prior result
+   and skips the LLM (faster + consistent). Realizes the cascade's long-planned
+   "embeddings tier" (stage B). Propose stack before building (adds an embedding
+   model + a small vector store; sentence-transformers is already a planned dep).
+3. **D4 part 2 (now OPTIONAL, latency no longer the driver):** gemini-2.5-flash-lite
+   is ~2 s, so the escalation tier is only worth it for raw quality on hard
+   prompts (stream stage-C output; an even stronger model for 3D/intricate). Gate
+   any model change with `eval_adherence.py`. D5 (optional) = VLM-critique→repair.
+4. **UX/UI polish — DEFERRED by the user** ("a bit buggy… work on this down the
+   road"). Revisit after the vector DB.
+5. **Still pending (human-only): §15 browser confirm + merges to main.**
 2. [x] **Live-mic review** — DONE (see §3). Finding: needs richer geometry.
 3. [x] **Richer geometry — DONE via LLM stage C (tier B).** Stage turned ON
    (Groq) + prompt teaches polygon/path/text; verified live (see §3).
@@ -1087,6 +1147,9 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-13 | **Instruction-adherence is scored by a pure, deterministic, no-VLM scorer** (`quorum/eval/adherence.py`): count/color (HSL hue)/coherence (union-find)/relations (bbox)/solids3d (shading signature OR `solids` path); `overall` = mean of APPLICABLE dims; a keyless `--self-test` gates the harness itself | "Model proposes, code disposes" applied to evaluation: the model draws, the code measures. No vision model keeps it fast, free, deterministic and CI-able. The harness — not the model — is the thing we must trust, so it is adversarially reviewed and unit-tested (85 tests) before any number is believed |
 | 2026-06-13 | **Adherence scoring guards (from the adversarial review):** coherence EXCLUDES near-full-canvas background parts (they'd bridge an exploded foreground); count SKIPS the `solids` path (projection face-decomposition multiplies role names); `overall` is conditioned on VALID rows (dim columns already are); near-white fills don't count as shaded 3D faces | A benchmark is only as trustworthy as its metric. Each guard closes a way a model could score high without adhering (or low despite adhering). Pinned by regression tests so the gaming vector can't silently return |
 | 2026-06-13 | **Do NOT swap the production default on this benchmark.** Cheap OpenRouter routes measured 30–72 s p95 (escalation-tier latency, not the ≤2 s fast tier); qwen3-235b "won" on adherence (1.0) but had a 429-exhausted NOOP row and the slowest latency | Reinforces the 2026-06-11 Groq-quota lesson: rate-limit-corrupted rows are not quality signals, and a benchmark we ran on slow/throttled routes can't promote a live default. The benchmark INFORMS the D4-part-2 escalation tier; it does not auto-promote |
+| 2026-06-14 | **Every CREATE takes focus** (was: only the first node ever, `first = _focus_id is None`); the previous focus steps back to ACTIVE | Live bug: a new shape kept editing the OLD shape because focus never moved off the first node, so follow-ups ("make it bigger") hit the stale node. Mirrors `_modify`'s focus move; demotion is in-memory and replay re-derives statuses from the final focus (no new event needed). The latest contribution is what you want to iterate on |
+| 2026-06-14 | **Directional placement is snapped deterministically** (`relations._snap_all_directional`: above/below/left/right/beside translate the new part to the stated side of the host with a small gap); "on top of" stays the compose on_top (overlap) path | Placement was ~20% accurate because only inside/tangent were snapped — every directional relation was raw LLM guesswork. Same "model proposes, code disposes" as inside/tangent: the direction is the meaning, the exact coords are incidental. Shares `_partition_new` (new vs old part identification) with the inside snap |
+| 2026-06-14 | **Default model swapped to `google/gemini-2.5-flash-lite`** on a CLEAN bake-off (0 429s, complete data): ~2 s/call AND strong on color/placement/3D | NOT a contradiction of the 2026-06-13 "don't swap on a corrupted benchmark" rule — that barred swapping on slow, rate-limited, NOOP-corrupted rows. This bake-off was clean and the model is both fast and accurate, fixing the latency AND the color/relations weakness at once. `gpt-5-nano` rejected (reasoning model: 65 s, returns null content). `eval_adherence.py` remains the gate for any future swap |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -1117,7 +1180,7 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
 | Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks + §14 undo branch 0 + §15 compose branch 5b (~0 ms) |
-| Classify (LLM) | <1.5 s local / <0.8 s Groq | scene create ~1.0/1.8 s; **scene-edit PATCH ~1.2–1.5 s live** (scout); full restyle re-emission ~3.5–5.5 s. **OpenRouter cheap tier (D4 benchmark 2026-06-13): p50 5.8–14.8 s / p95 30–72 s** (incl. 429-retry waits) | ON. Patch edits (add/set/remove parts) are ~3x faster than full re-emission. **The cheap OpenRouter routes are escalation-tier latency, NOT fast-tier — keep Groq/Cerebras for the live default; OpenRouter is the quota-resilient fallback / D4-part-2 escalation candidate** |
+| Classify (LLM) | <1.5 s local / <0.8 s Groq | **ACTIVE: `google/gemini-2.5-flash-lite` via OpenRouter ≈ 1.6–2.7 s/call** (bake-off 2026-06-14; one 8.6 s outlier). Prior cheap 'ling' was 5.8–14.8 s p50 / 30–72 s p95 (incl. 429 waits) — replaced | ON. gemini-2.5-flash-lite picked for fast AND accurate (color/placement/3D). gpt-5-nano rejected (reasoning model: 65 s, null content). Patch edits ~3x faster than full re-emission; most follow-ups (recolor/size/extrude/compose/undo) never reach the LLM |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
 | Engine apply | (internal) | **0.05 ms / 0.06 ms** | DAG mutation + event append; modify creates + renders a child node (§12); §14 undo = focus move only |
 | **End-to-end (server fast path)** | **<5 s** | **0.093 ms / 0.129 ms** | classify+engine+render. D3 AND D4 add NOTHING to the fast path — D4 is offline eval tooling (`quorum/eval`, `scripts/eval_adherence.py`) plus a default-OFF `record_diagnostics` hook on the LLM stage; the `solids` projection still lives in the LLM stage. p95 0.132→0.129 ms is run-to-run variance; ~38,000x under budget |
