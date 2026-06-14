@@ -529,7 +529,13 @@ class RulesClassifier:
             if single_new_spec is not None:
                 # Resolve the target node.
                 # Priority: explicit label ref > explicit definite-shape ref.
-                _compose_target: str | None = self._resolve_by_label(lowered, context)
+                # definite_only: the compose TARGET must be a definite reference
+                # ("the horse"); without this an INDEFINITE shape mention ("a
+                # line above the horse") could stem-match an existing "line" node
+                # and hijack the new create into a MODIFY of the wrong node.
+                _compose_target: str | None = self._resolve_by_label(
+                    lowered, context, definite_only=True
+                )
                 if _compose_target is None:
                     _compose_target = self._resolve_named(
                         self._find_definite_shape(lowered), context

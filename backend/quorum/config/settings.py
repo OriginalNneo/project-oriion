@@ -61,7 +61,9 @@ class Settings(BaseSettings):
 
     # --- Cloud creds (only required when a backend is OPENROUTER) ---
     openrouter_api_key: str | None = None
-    openrouter_model: str = "inclusionai/ling-2.6-flash"
+    # Picked by the D4 adherence bake-off (2026-06-14): fast (~2 s) AND strong on
+    # color/placement/3D, where the cheapest 'ling' model was slow + weak.
+    openrouter_model: str = "google/gemini-2.5-flash-lite"
 
     # --- Server ---
     host: str = "0.0.0.0"
