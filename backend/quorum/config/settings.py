@@ -65,6 +65,17 @@ class Settings(BaseSettings):
     # color/placement/3D, where the cheapest 'ling' model was slow + weak.
     openrouter_model: str = "google/gemini-2.5-flash-lite"
 
+    # --- Semantic retrieval / embeddings tier (optional; needs the `embeddings`
+    # extra). MOCK = off (keyword refs only, no cache — zero behavior change, no
+    # heavy dep). LOCAL = sentence-transformers: semantic few-shot references +
+    # an utterance->geometry cache that lets near-duplicate CREATEs skip the LLM.
+    retrieval_backend: Backend = Backend.MOCK
+    embedding_model: str = "all-MiniLM-L6-v2"
+    retrieval_top_k: int = Field(default=2, ge=1, le=8)
+    # Cosine ≥ this between two utterances ⇒ reuse the cached CREATE (skip the
+    # LLM). High by design: only near-identical requests reuse a drawing.
+    retrieval_cache_threshold: float = Field(default=0.94, ge=0.5, le=1.0)
+
     # --- Server ---
     host: str = "0.0.0.0"
     port: int = 8000

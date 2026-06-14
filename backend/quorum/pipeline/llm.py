@@ -32,12 +32,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from quorum.config.settings import Backend, Settings
+
+if TYPE_CHECKING:
+    from quorum.pipeline.retrieval import SemanticRetrieval
 from quorum.domain.geometry import GeometrySpec, ShapeKind
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
 from quorum.domain.parts import PartsPatch, apply_patch
@@ -505,12 +508,16 @@ class LLMClassifier:
         ollama_url: str = "http://localhost:11434",
         timeout_s: float = 8.0,
         record_diagnostics: bool = False,
+        retrieval: SemanticRetrieval | None = None,
     ) -> None:
         self._backend = backend
         self._model = model
         self._api_key = api_key
         self._ollama_url = ollama_url.rstrip("/")
         self._timeout = timeout_s
+        # Optional embeddings tier (plan.md §3.3 stage B): semantic few-shot
+        # references + a near-duplicate CREATE cache. None = off (the default).
+        self._retrieval = retrieval
         # Opt-in eval hook (plan.md §11 D4): when True, `classify` records the
         # shape of each raw payload ("solids"/"patch"/"geometry"/"none") so the
         # adherence harness can report which path the model chose. Default OFF —
@@ -520,12 +527,16 @@ class LLMClassifier:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> LLMClassifier:
+        from quorum.pipeline.retrieval import get_retrieval
+
+        retrieval = get_retrieval(settings)  # process-wide singleton (shared across rooms)
         if settings.llm_backend is Backend.GROQ:
             return cls(
                 backend=Backend.GROQ,
                 model=settings.groq_model,
                 api_key=settings.require_groq_key(),
                 timeout_s=settings.llm_timeout_s,
+                retrieval=retrieval,
             )
         if settings.llm_backend is Backend.OPENROUTER:
             return cls(
@@ -533,12 +544,14 @@ class LLMClassifier:
                 model=settings.openrouter_model,
                 api_key=settings.require_openrouter_key(),
                 timeout_s=settings.llm_timeout_s,
+                retrieval=retrieval,
             )
         return cls(
             backend=Backend.LOCAL,
             model=settings.ollama_model,
             ollama_url=settings.ollama_url,
             timeout_s=settings.llm_timeout_s,
+            retrieval=retrieval,
         )
 
     async def classify(
@@ -552,7 +565,13 @@ class LLMClassifier:
         if self._record_diagnostics:
             self.last_payload_kind = None
         try:
-            raw = await self._complete(text, context)
+            # Embeddings tier (optional): warm the reference index once, then try
+            # the near-duplicate CREATE cache before spending an LLM round-trip.
+            cache_op, refs = await self._retrieve(text, speaker_id, utterance_id)
+            if cache_op is not None:
+                return cache_op  # near-duplicate create — LLM skipped
+
+            raw = await self._complete(text, context, references=refs)
             payload = _parse_and_repair(raw)
 
             if payload is None:
@@ -579,6 +598,16 @@ class LLMClassifier:
                 focus_geometry=context.focus_geometry,
                 focus_node_id=context.focus_node_id,
             )
+            # Remember a fresh standalone CREATE so a near-duplicate request can
+            # reuse it later (skipping the LLM). Modifies/composes are excluded
+            # (target_node_id set) — reusing those would be context-wrong.
+            if (
+                self._retrieval is not None
+                and op.op_type is OpType.CREATE
+                and op.geometry is not None
+                and op.target_node_id is None
+            ):
+                await self._retrieval.remember(text, op.geometry)
             _log.debug("llm_classified", op_type=str(op.op_type), confidence=op.confidence)
             return op
         except Exception as exc:
@@ -586,10 +615,66 @@ class LLMClassifier:
             _log.warning("llm_classify_failed", error=str(exc), backend=str(self._backend))
             return _noop(speaker_id=speaker_id, utterance_id=utterance_id, raw_text=text)
 
+    async def _retrieve(
+        self, text: str, speaker_id: str, utterance_id: str
+    ) -> tuple[DesignOp | None, list[tuple[str, GeometrySpec]] | None]:
+        """Embeddings-tier work for one utterance. Returns ``(cache_op, refs)``:
+        a ready CREATE op on a near-duplicate cache hit (then refs is None), else
+        the semantic few-shot references. ``(None, None)`` when retrieval is off."""
+        if self._retrieval is None:
+            return None, None
+        if not self._retrieval.indexed:
+            from quorum.pipeline.templates import all_templates
+
+            await asyncio.to_thread(self._retrieval.index_references, all_templates())
+        cached = await self._retrieval.cached(text)
+        if cached is not None:
+            if self._record_diagnostics:
+                self.last_payload_kind = "cache"
+            _log.info("llm_cache_hit", utterance_id=utterance_id)
+            from quorum.pipeline.templates import match
+
+            label = cached.label
+            if label is None:
+                hits = match(text, limit=1)
+                label = hits[0][0] if hits else None
+            cache_op = DesignOp(
+                op_type=OpType.CREATE,
+                target_shape=cached.kind,
+                geometry=cached,
+                label=label,
+                speaker_id=speaker_id,
+                utterance_id=utterance_id,
+                confidence=0.9,
+                source_stage="cache",
+                raw_text=text,
+            )
+            return cache_op, None
+        return None, await self._retrieval.references(text)
+
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _user_payload(text: str, context: ClassifierContext) -> str:
+    def _user_payload(
+        text: str,
+        context: ClassifierContext,
+        references: list[tuple[str, GeometrySpec]] | None = None,
+    ) -> str:
         from quorum.pipeline.templates import match
+
+        # Known-good reference sketches the model ADAPTS (not invents). Semantic
+        # references (embeddings tier) win when supplied; otherwise fall back to
+        # keyword template match. Suppressed on 3D intent — flat QuickDraw doodles
+        # fight 3D requests.
+        if has_3d_intent(text):
+            ref_pairs: list[tuple[str, GeometrySpec]] = []
+        elif references is not None:
+            ref_pairs = references
+        else:
+            ref_pairs = [(name, spec) for name, _, spec in match(text, limit=2)]
+        reference_sketches = [
+            {"name": name, "geometry": spec.model_dump(mode="json", exclude_defaults=True)}
+            for name, spec in ref_pairs
+        ] or None
 
         return json.dumps(
             {
@@ -611,26 +696,19 @@ class LLMClassifier:
                         if context.focus_geometry is not None
                         else None
                     ),
-                    # Known-good sketches for concepts the utterance mentions
-                    # (mined from real drawings) — the model adapts, not invents.
-                    # Flat QuickDraw doodles fight 3D intent, so suppress them.
-                    "reference_sketches": (
-                        None  # flat doodles fight 3D intent — suppress them
-                        if has_3d_intent(text)
-                        else [
-                            {
-                                "name": name,
-                                "geometry": spec.model_dump(mode="json", exclude_defaults=True),
-                            }
-                            for name, _, spec in match(text, limit=2)
-                        ] or None
-                    ),
+                    "reference_sketches": reference_sketches,
                 },
             }
         )
 
-    async def _complete(self, text: str, context: ClassifierContext) -> str:
-        user = self._user_payload(text, context)
+    async def _complete(
+        self,
+        text: str,
+        context: ClassifierContext,
+        *,
+        references: list[tuple[str, GeometrySpec]] | None = None,
+    ) -> str:
+        user = self._user_payload(text, context, references)
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user},
