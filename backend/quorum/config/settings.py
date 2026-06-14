@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # Cosine ≥ this between two utterances ⇒ reuse the cached CREATE (skip the
     # LLM). High by design: only near-identical requests reuse a drawing.
     retrieval_cache_threshold: float = Field(default=0.94, ge=0.5, le=1.0)
+    # Where to persist the near-duplicate CREATE cache so it survives a restart.
+    # None = in-memory only (cache rebuilt empty each boot). The file is keyed by
+    # embedding model, so a model change safely ignores a stale file.
+    retrieval_cache_path: str | None = None
 
     # --- Server ---
     host: str = "0.0.0.0"

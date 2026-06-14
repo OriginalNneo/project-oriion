@@ -31,6 +31,9 @@ models/
 *.pt
 *.onnx
 
+# ---- Runtime caches ----
+.quorum_cache/
+
 # ---- OS / editor ----
 .DS_Store
 .idea/
