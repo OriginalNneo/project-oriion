@@ -175,15 +175,21 @@ class DesignStateEngine:
     def _create(self, op: DesignOp) -> NodeView:
         geom = self._resolve_geometry(op, parent=None)
         node = self._new_node(op, geom, parent_ids=[])
-        # First node created becomes the focus by default. Status is set before
-        # the event is recorded so the event's node snapshot is replay-accurate.
-        first = self._focus_id is None
-        if first:
-            node.status = NodeStatus.FOCUSED
+        # A new idea ALWAYS takes focus, so follow-ups ("make it bigger", "turn
+        # it red") apply to the shape just created — not a stale earlier one.
+        # (Before: only the FIRST create ever focused, so every later create left
+        # focus on the old node — the "it keeps editing the old shape" bug.) The
+        # previous focus steps back to ACTIVE; the demotion is an in-memory status
+        # mutation (not an event) exactly as _modify does — replay re-derives all
+        # statuses from the final focus, and FOCUS_CHANGED keeps that in the log.
+        # Status is set before the event is recorded so the snapshot is accurate.
+        previous = self._nodes.get(self._focus_id) if self._focus_id else None
+        node.status = NodeStatus.FOCUSED
         self._nodes[node.id] = node
         self._record(EventType.NODE_CREATED, op, node)
-        if first:
-            self._set_focus(node.id, op)
+        if previous is not None and previous.status == NodeStatus.FOCUSED:
+            previous.status = NodeStatus.ACTIVE
+        self._set_focus(node.id, op)
         return node_to_view(node)
 
     def _branch(self, op: DesignOp) -> NodeView:
