@@ -169,6 +169,32 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Embeddings tier (the "vector DB"): semantic references + near-duplicate
+  cache — DONE & live-verified (2026-06-14, branch drawing-quality-d3, committed
+  c344d1e; 579 tests, ruff+mypy clean, fast path unchanged).** The user's idea;
+  realizes the cascade's long-planned stage B. `pipeline/embeddings.py` (Embedder
+  Protocol + lazy LocalEmbedder, sentence-transformers) + `pipeline/retrieval.py`
+  (numpy-cosine `_Index` + `SemanticRetrieval` + a PROCESS-WIDE `get_retrieval`
+  singleton so all rooms share one model + index, not N copies). Wired into the
+  LLM stage's `classify`.
+  - **Semantic references:** embed the utterance → inject the nearest known-good
+    drawings (template bank + remembered CREATEs) as LLM few-shot refs. Live:
+    "a frosty figure" → [snowflake, ice cream] (keyword match returns nothing).
+    Safe in every context — only changes which examples the model sees.
+  - **Near-duplicate cache:** remember each CREATE (utterance→geometry); a
+    create-like near-duplicate (cosine ≥ 0.94, no modify/extend markers via
+    `is_create_like`) reuses the stored geometry and SKIPS the LLM. Live: 2nd
+    "a medieval castle" → stage=cache 0.01 s vs 48 s. Reuse is always a CREATE so
+    it is NON-DESTRUCTIVE (the cache safety floor); modifies/composes
+    (target_node_id set) are never cached.
+  - **Gated:** `QUORUM_RETRIEVAL_BACKEND=mock` (default) = OFF, no heavy dep
+    needed; `local` = sentence-transformers (the `embeddings` extra). 9 unit
+    tests use a deterministic STUB embedder (no torch in CI). Enabled in .env now.
+  - Follow-ups (noted, non-blocking): first novel utterance per process warms the
+    345-template index (~3-4 s one-time — could warm at startup); the cache is
+    in-memory (lost on restart — persist later); references quality is bounded by
+    the template corpus ("frosty figure" found snowflake, not a snowman — corpus
+    gap, fine).
 - **Detection-accuracy fixes + fast/accurate model — DONE & live-verified
   (2026-06-14, branch drawing-quality-d3; 570 tests, ruff+mypy clean, fast path
   p95 0.119 ms; committed 63e917c).** Two live user-reported bugs, root-caused by
@@ -1043,13 +1069,10 @@ _(append-only-ish; newest at top)_
    §3 top + commit 63e917c. Focus-on-create fix, deterministic directional
    placement snapping, definite-only compose target, and the gemini-2.5-flash-lite
    model swap (~2 s). User goal "placement ~20%→85%, new shapes focus, faster" met.
-2. **Resume point: vector DB (semantic retrieval + result cache)** — the user's
-   speed/consistency idea. Design: (a) embed the utterance, retrieve the closest
-   known-good drawings as few-shot references (better detection); (b) an
-   utterance→geometry cache so a near-duplicate request reuses the prior result
-   and skips the LLM (faster + consistent). Realizes the cascade's long-planned
-   "embeddings tier" (stage B). Propose stack before building (adds an embedding
-   model + a small vector store; sentence-transformers is already a planned dep).
+2. [x] **Vector DB (embeddings tier) — DONE & live-verified (2026-06-14).** See
+   §3 top + commit c344d1e. Semantic few-shot references + near-duplicate CREATE
+   cache; gated (`QUORUM_RETRIEVAL_BACKEND=local`, default off). Follow-ups noted
+   in §3 (warm index at startup; persist cache to disk).
 3. **D4 part 2 (now OPTIONAL, latency no longer the driver):** gemini-2.5-flash-lite
    is ~2 s, so the escalation tier is only worth it for raw quality on hard
    prompts (stream stage-C output; an even stronger model for 3D/intricate). Gate
@@ -1150,6 +1173,7 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-14 | **Every CREATE takes focus** (was: only the first node ever, `first = _focus_id is None`); the previous focus steps back to ACTIVE | Live bug: a new shape kept editing the OLD shape because focus never moved off the first node, so follow-ups ("make it bigger") hit the stale node. Mirrors `_modify`'s focus move; demotion is in-memory and replay re-derives statuses from the final focus (no new event needed). The latest contribution is what you want to iterate on |
 | 2026-06-14 | **Directional placement is snapped deterministically** (`relations._snap_all_directional`: above/below/left/right/beside translate the new part to the stated side of the host with a small gap); "on top of" stays the compose on_top (overlap) path | Placement was ~20% accurate because only inside/tangent were snapped — every directional relation was raw LLM guesswork. Same "model proposes, code disposes" as inside/tangent: the direction is the meaning, the exact coords are incidental. Shares `_partition_new` (new vs old part identification) with the inside snap |
 | 2026-06-14 | **Default model swapped to `google/gemini-2.5-flash-lite`** on a CLEAN bake-off (0 429s, complete data): ~2 s/call AND strong on color/placement/3D | NOT a contradiction of the 2026-06-13 "don't swap on a corrupted benchmark" rule — that barred swapping on slow, rate-limited, NOOP-corrupted rows. This bake-off was clean and the model is both fast and accurate, fixing the latency AND the color/relations weakness at once. `gpt-5-nano` rejected (reasoning model: 65 s, returns null content). `eval_adherence.py` remains the gate for any future swap |
+| 2026-06-14 | **Embeddings tier is gated + a process-wide singleton.** Default `QUORUM_RETRIEVAL_BACKEND=mock` (off, keyword refs, no torch); `local` enables semantic refs + the near-duplicate cache. `get_retrieval` is lru_cached so all rooms share ONE embedder+index | `build_classifier` runs per room — a per-instance embedder would load the model + re-embed 345 templates N times (memory + latency blowup). Gating keeps CI/basic checkouts torch-free. The result cache reuses CREATEs ONLY (non-destructive) on cosine ≥ 0.94 + no modify markers, so a near-duplicate can't corrupt a context-dependent edit |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
