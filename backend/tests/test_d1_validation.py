@@ -251,7 +251,7 @@ async def test_full_classify_clamped_geometry(monkeypatch: pytest.MonkeyPatch) -
     )
     clf = _make_clf()
 
-    async def _fake_complete(text: str, context: object) -> str:
+    async def _fake_complete(text: str, context: object, *, references: object = None) -> str:
         return bad_json
 
     clf._complete = _fake_complete  # type: ignore[method-assign]
@@ -356,7 +356,7 @@ async def test_full_classify_salvage_group(monkeypatch: pytest.MonkeyPatch) -> N
     )
     clf = _make_clf()
 
-    async def _fake_complete(text: str, context: object) -> str:
+    async def _fake_complete(text: str, context: object, *, references: object = None) -> str:
         return bad_group_json
 
     clf._complete = _fake_complete  # type: ignore[method-assign]
@@ -512,7 +512,7 @@ async def test_groq_send_includes_max_tokens_via_mock_transport() -> None:
 
     call_count = 0
 
-    async def _fake_complete(text: str, context: object) -> str:
+    async def _fake_complete(text: str, context: object, *, references: object = None) -> str:
         nonlocal call_count
         call_count += 1
         # Reconstruct what _send does, but with the mock transport

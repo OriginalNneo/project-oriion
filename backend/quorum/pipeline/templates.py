@@ -135,6 +135,12 @@ def match(text: str, *, limit: int = 2) -> list[tuple[str, str, GeometrySpec]]:
     return found
 
 
+def all_templates() -> list[tuple[str, GeometrySpec]]:
+    """Every ``(canonical_name, spec)`` in the bank — the corpus the semantic
+    retrieval tier (:mod:`quorum.pipeline.retrieval`) embeds for few-shot lookup."""
+    return list(_library().items())
+
+
 class TemplateClassifier:
     """Stage B: instant answer for bare "a <known thing>" create utterances.
 
