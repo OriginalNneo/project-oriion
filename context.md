@@ -145,16 +145,6 @@ composes the box onto the horse as a child iteration, not a standalone node.
 §13/§12 all segments DONE. Fast path p95 sub-ms. ⚠️ Groq 70b AND scout both
 quota-dead 2026-06-12; all deterministic paths run without the LLM.
 
-**Session 2026-07-11 — doc-maintenance only, no code change.** State
-re-confirmed against the repo (last code commit 2026-06-12, §14 U4). The §1
-one-line status had drifted a segment behind (still read §13-era: 354 tests,
-p95 0.178 ms, e2e 16/16) — reconciled to the §14 reality already recorded in
-the header and §3 (393 tests, fast-path p95 0.128 ms, §14 undo shipped). No
-new segment started. Still GATED on the two open items: the **human browser
-pass** and the user's **incoming mind-map design reference** before any canvas
-redesign. Next code work remains D3 — true 3D projection (plan.md §11) — after
-the browser confirm.
-
 **Previous program (2026-06-11): Drawing Quality D1–D5 — D1/D2 done, D3–D5
 resume after the §12 browser confirm. Steps:**
 1. [x] **Exact-relations segment — DONE & COMMITTED** (live re-probe passed
