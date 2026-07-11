@@ -242,11 +242,20 @@ _(append-only-ish; newest at top)_
     held-out to **0.919** under a correct scorer. Both are legitimate; the 0.90+ is
     meaningful, not gamed (the frozen-battery discipline held throughout — no
     expectation was edited to cross the gate).
+  - **Whole-system `scripts/e2e_check.py` 20/20 ALL PASS** (real uvicorn + WebSocket
+    + live LLM — covers the production `_user_payload` ref-filtering + salvage paths
+    Seg 1–3 touched, which the mocked/stage-C gates never exercised; an earlier run
+    failed on TRANSIENT LLM/HF-504 latency, rocket re-probed valid in 2.8 s).
+  - **scorer-v2 limitation (watch for battery growth):** distinct-feature counting
+    merges TOUCHING same-role parts, while coherence rewards touching — so N
+    *adjacent* same-role instances would UNDERCOUNT. No current prompt hits it
+    (thrusters/windows/eyes are spaced).
   - **LOOP TARGET REACHED (held-out median ≥ 0.90). Remaining honest headroom
     (optional): coffee-cup 0.44 (detached handle → coherence 0.0 + min_parts sparse)
     and the side-view car (a real model limitation).** Files:
     `quorum/eval/adherence.py`, `tests/test_adherence.py`, `scripts/eval_adherence.py`
-    (self-test), `tests/test_refinement_regression.py`.
+    (self-test), `tests/test_refinement_regression.py`. **5 loop commits on branch
+    `drawing-quality-d3`, pushed, NOT merged to main (browser confirm is human-only).**
 - **Refinement loop — Segment 3: scene completeness (counted-feature refs) — DONE
   (2026-07-12, branch drawing-quality-d3; OPUS fixer subagent per user directive;
   ruff + mypy strict, 699 tests, +4 keyless `test_seg3_*` guards).** Root cause of
