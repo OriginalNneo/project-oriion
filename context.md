@@ -5,13 +5,14 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-06-12  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, AND §14 voice undo + viewport follow — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **393 tests**, tsc, vite build. Next: user's mind-map design reference (incoming) → canvas redesign; human browser confirm; then D3 (plan.md §11).
+> **Last updated:** 2026-07-11 _(doc-maintenance refresh — no code changes since §14 on 2026-06-12; §1 numbers reconciled to the §14 reality)_  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, AND §14 voice undo + viewport follow — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **393 tests**, tsc, vite build. Next: user's mind-map design reference (incoming) → canvas redesign; human browser confirm; then D3 (plan.md §11).
 
 ---
 
 ## 1. One-line status
 **Voice MVP + compositional iteration (§12) + part-level editing & in-chain
-3D conversion (§13) shipped.** Every modify branches a new mind-map child;
+3D conversion (§13) + voice undo/go-back & viewport follow (§14) shipped.**
+Every modify branches a new mind-map child;
 recolors/restyles/extrusions/part edits are deterministic where they can be
 ("a hexagon" → "turn this hexagon pink" → "make this hexagon three
 dimensional" runs entirely rules-stage at 0 ms, ending in a cabinet-extruded
@@ -19,8 +20,8 @@ prism in three pink shades); the LLM edits scenes via a compact set/add/
 remove PATCH against named parts ("add two eyes to this mouse" = 1.2 s,
 originals byte-identical) and the rules layer handles part-scoped follow-ups
 ("make one eye bigger than the other" = 0 ms, only that eye grows). All
-checks green (ruff, mypy, **354 backend tests**, tsc, vite build); fast path
-p95 0.178 ms; `e2e_check.py` 16/16 ALL PASS. Next: human browser confirm,
+checks green (ruff, mypy, **393 backend tests**, tsc, vite build); fast path
+p95 **0.128 ms**; `e2e_check.py` ALL PASS. Next: human browser confirm,
 then D3 — true 3D projection (plan.md §11).
 
 ## 2. Current focus
@@ -49,6 +50,16 @@ plan.md §14. U1 UNDO op ✅ · U2 undo grammar ✅ · U3 viewport follow ✅ ·
 U4 integration (e2e ALL PASS) ✅. 393 tests, all checks green, fast path
 p95 0.128 ms. ⚠️ Groq: 70b AND scout both quota-dead today; every §14
 path is deterministic and ran without the LLM.
+
+**Session 2026-07-11 — doc-maintenance only, no code change.** State
+re-confirmed against the repo (last code commit 2026-06-12, §14 U4). The §1
+one-line status had drifted a segment behind (still read §13-era: 354 tests,
+p95 0.178 ms, e2e 16/16) — reconciled to the §14 reality already recorded in
+the header and §3 (393 tests, fast-path p95 0.128 ms, §14 undo shipped). No
+new segment started. Still GATED on the two open items: the **human browser
+pass** and the user's **incoming mind-map design reference** before any canvas
+redesign. Next code work remains D3 — true 3D projection (plan.md §11) — after
+the browser confirm.
 
 **Previous program (2026-06-11): Drawing Quality D1–D5 — D1/D2 done, D3–D5
 resume after the §12 browser confirm. Steps:**
