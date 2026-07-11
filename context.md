@@ -214,6 +214,39 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Refinement loop — Segment 2: truncated-JSON salvage — DONE (2026-07-12,
+  branch drawing-quality-d3; Fable-5 fixer subagent; ruff + mypy strict, 695
+  tests, +8 keyless `test_seg2_*` guards).** Verbose scenes emit dense
+  PATH-coordinate payloads that overran the 4096-token cap and arrived cut off
+  mid `geometry.parts` → `json.loads` failed → NOOP → invalid geometry (0.00);
+  confirmed on "a car with four wheels" (8046 chars, JSONDecodeError at char
+  8046, failed 4/4 even at 30 s timeout — truncation, not a timeout artifact).
+  - Fix (all in `pipeline/llm.py`, "code disposes", conservative/subtractive):
+    NEW `_repair_truncated_json` — a JSON-prefix recovery scanner that runs ONLY
+    after `json.loads` fails (well-formed payloads byte-identical), tracks open
+    containers/strings/commas, cuts back to the innermost complete `parts`/
+    `solids` boundary (drops the half-written trailing element WHOLE, never a
+    partial part), and closes the brackets. Plus `_flatten_nested_groups` (the
+    model nests each car wheel as a 5-path sub-group; the flat-group domain
+    rejected it — inline sub-parts, coords already absolute, name-prefixed),
+    `_has_recovered_content` (an all-parts-lost salvage still fires the
+    corrective retry), `_MAX_TOKENS` 4096 → 6144, and a "BE ECONOMICAL with
+    geometry" system-prompt nudge (also trims the ~17 s latency).
+  - **Verified INDEPENDENTLY (median of 3 held-out runs per the hardened gate):**
+    TUNING strict **0.913 → 0.924** (12/12, solids 4/4); HELDOUT strict **~0.79 →
+    0.85 median** (0.817/0.85/0.85; validity now **10/10**, solids 4/4). "a car
+    with four wheels" 0.00 → always valid (1.00/0.50/0.50; the 0.50 = fewer wheels
+    survive salvage — honestly improvable). robot/snowman also recovered
+    (0.62→0.75, 0.67→0.83). Accepted: both sets net-up, locked tests green.
+  - **STOP GATE (held-out median ≥ 0.90) NOT met (0.85) → loop continues.** The
+    remaining ~0.05 is dominated by (a) car wheel-count completeness (an HONEST
+    lever — ensure all 4 wheels survive → Segment 3) and (b) the count
+    double-count SCORER artifact (robot-head antenna tip+rod → 4/2) + a strict
+    held-out min_parts — both FROZEN this run (fixing the instrument to cross the
+    gate = Goodhart; deferred to a separate baseline-resetting scorer/battery v2).
+  - Files: `quorum/pipeline/llm.py`, `tests/test_refinement_regression.py`.
+    NOTE: Fable-5 tier hit its session limit mid-eval (resets ~22:50 SGT); the
+    diff was complete so the orchestrator gated + measured + committed it.
 - **Refinement loop — Segment 1: 3D-solids emission fixed — DONE (2026-07-11,
   branch drawing-quality-d3; Fable-5 fixer subagent; ruff + mypy strict, 687
   tests, +6 keyless `test_seg1_*` guards).** The whole non-trivial 3D path was

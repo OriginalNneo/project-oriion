@@ -15,12 +15,21 @@ validation — degrades to a zero-confidence NOOP, and the cascade falls back to
 the rules result. A dead LLM never takes the loop down.
 
 Validation repair pipeline ("model proposes, code disposes"):
+  0. *Truncation salvage* — a verbose scene can overrun the completion token
+     cap and arrive cut off mid `geometry.parts` / `solids`; instead of
+     discarding everything, the largest valid prefix is recovered (complete
+     leading parts kept, the half-written trailing element dropped, brackets
+     closed). Purely subtractive — nothing is fabricated — and it only runs
+     when `json.loads` has already failed, so well-formed payloads are
+     byte-identically untouched.
   1. *Clamp* — out-of-range x/y/width/height/points coordinates are clamped into
      the 0..100 box rather than rejected; path `d` data is left for the domain
      validator (clamping individual path numbers would silently corrupt curves).
-  2. *Salvage* — if a group has N parts and only some fail validation after
-     clamping, the bad parts are dropped; the group survives with the rest
-     (requires >= 1 surviving part).
+  2. *Salvage* — nested sub-groups are flattened (the domain requires flat
+     groups; sub-part coords are already absolute, so the drawing is
+     unchanged), then if a group has N parts and only some fail validation
+     after clamping, the bad parts are dropped; the group survives with the
+     rest (requires >= 1 surviving part).
   3. *Retry* — if the whole payload is still invalid after clamp+salvage, ONE
      additional LLM call is made with the pydantic error appended as a corrective
      user message. The existing 429/5xx retry is orthogonal; total worst-case
@@ -59,9 +68,12 @@ from quorum.pipeline.intent import has_volumetric_intent
 _log = get_logger("pipeline.llm")
 
 # Maximum tokens requested from the LLM. The IR caps path data at 64 commands /
-# 600 chars and full scenes are a few KB of JSON — 4096 tokens covers it
-# comfortably. Tunable without a code change via QUORUM_LLM_MAX_TOKENS.
-_MAX_TOKENS: int = int(os.environ.get("QUORUM_LLM_MAX_TOKENS", "4096"))
+# 600 chars, but a verbose multi-part scene (measured live: "a car with four
+# wheels" on gemini-2.5-flash-lite) can overrun 4096 tokens and arrive cut off
+# mid `geometry.parts` — 6144 gives dense scenes headroom, and
+# `_repair_truncated_json` salvages any payload that still overruns.
+# Tunable without a code change via QUORUM_LLM_MAX_TOKENS.
+_MAX_TOKENS: int = int(os.environ.get("QUORUM_LLM_MAX_TOKENS", "6144"))
 
 _SYSTEM_PROMPT = """\
 You turn ONE spoken utterance from a live collaborative design session into ONE JSON design operation. Reply with a single JSON object and nothing else.
@@ -113,6 +125,7 @@ Rules:
 - For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part. Parts ATTACH and OVERLAP — neighbouring parts' boxes share area or at least an edge (a snowman = three circles stacked and overlapping); never lay components out disjoint side-by-side — that is an exploded blueprint, not a sketch. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
 - context.reference_sketches: known-good geometry for concepts the utterance mentions, mined from real human drawings. When present, ADAPT the reference — reposition, rescale, recolor, combine with other parts — instead of inventing the concept from scratch. References are drawn full-canvas: shrink them when they are only one part of a larger scene.
 - Compose generously and use the RICH primitives — favor polygon/path/text over stacks of rectangles when they capture the shape better. Keep every coordinate inside 0..100 and the result visually coherent and centered.
+- BE ECONOMICAL with geometry: a recognizable sketch needs its signature parts, not photorealism. Prefer a few well-chosen primitives and COARSE paths (keep a path "d" under ~12 commands); never emit hundred-point paths or dozens of near-identical micro-parts — an over-long reply gets cut off and loses its final parts. A clean 8-part sketch beats a truncated 40-part one.
 
 Example A — "a five-pointed star" (single exact polygon):
 {"op_type":"create","target_shape":"polygon","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"geometry":{"kind":"polygon","x":50,"y":50,"width":50,"height":50,"corner_radius":0,"stroke":"#1f2937","points":[[50,12],[61,38],[89,38],[66,56],[75,84],[50,67],[25,84],[34,56],[11,38],[39,38]],"parts":[]}}
@@ -222,19 +235,48 @@ def _repair_geometry_dict(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _flatten_nested_groups(raw_parts: list[Any]) -> list[Any]:
+    """Inline the sub-parts of any nested ``group`` part, in order.
+
+    The domain requires flat groups ("no group inside parts"), but verbose
+    scenes make the model nest sub-assemblies (measured live: each car wheel a
+    group of 5 paths). Sub-part coordinates are already absolute in the same
+    0..100 box, so inlining preserves the drawing exactly — nothing is
+    fabricated or moved. Named sub-parts get the group's name as a prefix so
+    they stay uniquely addressable for later part edits.
+    """
+    flat: list[Any] = []
+    for part in raw_parts:
+        if isinstance(part, dict) and part.get("kind") == "group":
+            prefix = part.get("name")
+            subs = part.get("parts")
+            if not isinstance(subs, list):
+                continue
+            for sub in _flatten_nested_groups(subs):
+                if isinstance(sub, dict) and isinstance(prefix, str):
+                    sub_name = sub.get("name")
+                    if isinstance(sub_name, str) and sub_name:
+                        sub["name"] = f"{prefix}-{sub_name}"[:40]
+                flat.append(sub)
+        else:
+            flat.append(part)
+    return flat
+
+
 def _salvage_group_parts(raw: dict[str, Any]) -> GeometrySpec | None:
     """Attempt to salvage a group whose parts fail validation individually.
 
-    Strategy: validate each part independently; keep the ones that pass, drop
-    the rest. A group with >= 1 surviving part is returned; if no parts survive
-    the whole spec is un-salvageable and we return None.
+    Strategy: flatten nested sub-groups (the domain requires flat groups), then
+    validate each part independently; keep the ones that pass, drop the rest. A
+    group with >= 1 surviving part is returned; if no parts survive the whole
+    spec is un-salvageable and we return None.
 
     This only applies to groups — non-group specs with a bad payload cannot be
     meaningfully salvaged without changing the shape's meaning.
     """
     if raw.get("kind") != "group":
         return None
-    raw_parts: list[Any] = raw.get("parts") or []
+    raw_parts: list[Any] = _flatten_nested_groups(raw.get("parts") or [])
     if not raw_parts:
         return None
     good_parts: list[dict[str, Any]] = []
@@ -259,6 +301,152 @@ def _salvage_group_parts(raw: dict[str, Any]) -> GeometrySpec | None:
         return GeometrySpec.model_validate(salvaged)
     except (ValidationError, ValueError):
         return None
+
+
+@dataclass
+class _JsonFrame:
+    """One still-open container met while scanning a truncated JSON payload."""
+
+    is_array: bool
+    # The object-member name this container is the value of (None at the root
+    # or inside an array) — lets the cut point prefer `parts`/`solids` lists.
+    key: str | None
+    # Index just AFTER this container's last COMPLETE element/member (or just
+    # after its opening bracket when nothing has completed yet).
+    last_complete: int
+    has_element: bool = False
+    # Object frames only: the next string encountered is a member key.
+    expect_key: bool = False
+    pending_key: str | None = None
+
+
+# List keys whose elements are self-contained drawables — the preferred cut
+# points for truncation salvage (dropping a whole half-written part/solid).
+_PART_LIST_KEYS: frozenset[str] = frozenset({"parts", "solids"})
+
+
+def _repair_truncated_json(raw: str) -> str | None:
+    """Recover the largest valid prefix of a payload truncated mid-emission.
+
+    Verbose scenes can exceed the completion token cap (`_MAX_TOKENS`), cutting
+    the JSON off inside `geometry.parts` or `solids`; discarding the whole reply
+    then loses every part the model DID finish emitting. This scans the text
+    tracking the open containers and, for each, the position just after its last
+    COMPLETE element/member; it then cuts back to the innermost `parts`/`solids`
+    array boundary (dropping the half-written trailing element WHOLE — never a
+    partial part), else the innermost completed container boundary, and appends
+    the missing closing brackets.
+
+    Purely subtractive — nothing is fabricated or reordered — and callers only
+    invoke it after ``json.loads`` has failed, so well-formed payloads are never
+    touched. Returns the repaired JSON text, or None when nothing complete and
+    self-contained can be recovered (including when the root actually closed:
+    that failure was not truncation and is not ours to fix).
+    """
+    start = raw.find("{")
+    if start == -1:
+        return None
+    frames: list[_JsonFrame] = []
+    in_string = False
+    escape = False
+    string_start = -1
+    i = start
+    n = len(raw)
+    while i < n:
+        c = raw[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+                if frames:
+                    fr = frames[-1]
+                    if not fr.is_array and fr.expect_key:
+                        fr.pending_key = raw[string_start + 1 : i]
+                        fr.expect_key = False
+                    else:  # a completed string VALUE
+                        fr.last_complete = i + 1
+                        fr.has_element = True
+                        if not fr.is_array:
+                            fr.expect_key = True
+        elif c == '"':
+            in_string = True
+            string_start = i
+        elif c in "{[":
+            key = frames[-1].pending_key if frames and not frames[-1].is_array else None
+            frames.append(
+                _JsonFrame(is_array=c == "[", key=key, last_complete=i + 1, expect_key=c == "{")
+            )
+        elif c in "}]":
+            if not frames or frames[-1].is_array != (c == "]"):
+                return None  # malformed nesting — not a truncation artifact
+            frames.pop()
+            if not frames:
+                return None  # root closed: the parse failure wasn't truncation
+            fr = frames[-1]
+            fr.last_complete = i + 1
+            fr.has_element = True
+            if not fr.is_array:
+                fr.expect_key = True
+        elif c == ",":
+            # A comma terminates the pending element/member — including bare
+            # scalars (numbers/true/false/null), which have no other end marker.
+            # Cut point excludes the comma itself.
+            if frames:
+                fr = frames[-1]
+                fr.last_complete = i
+                fr.has_element = True
+                if not fr.is_array:
+                    fr.expect_key = True
+        i += 1
+    if not frames:
+        return None
+
+    # Pick the cut frame, innermost first: a `parts`/`solids` array (drop the
+    # whole partial part), else any array with a complete element, else any
+    # container with a complete member.
+    cut = -1
+    for idx in range(len(frames) - 1, -1, -1):
+        if frames[idx].is_array and frames[idx].key in _PART_LIST_KEYS:
+            cut = idx
+            break
+    if cut == -1:
+        for idx in range(len(frames) - 1, -1, -1):
+            if frames[idx].is_array and frames[idx].has_element:
+                cut = idx
+                break
+    if cut == -1:
+        for idx in range(len(frames) - 1, -1, -1):
+            if frames[idx].has_element:
+                cut = idx
+                break
+    if cut == -1 or not frames[cut].has_element:
+        return None  # nothing complete inside — un-salvageable
+
+    text = raw[start : frames[cut].last_complete].rstrip()
+    if text.endswith(","):  # defensive: a valid prefix never needs one
+        text = text[:-1]
+    closers = "".join("]" if fr.is_array else "}" for fr in reversed(frames[: cut + 1]))
+    return text + closers
+
+
+def _has_recovered_content(payload: _LLMPayload) -> bool:
+    """True when a truncation-salvaged payload still carries drawable content.
+
+    A salvage that lost ALL of its parts/solids (or never reached the geometry)
+    must count as a parse failure so the corrective retry still runs — an empty
+    CREATE is strictly worse than spending the second model call.
+    """
+    if payload.solids:
+        return True
+    if payload.patch is not None:
+        return True
+    geom = payload.geometry
+    if geom is None:
+        return False
+    return geom.kind is not ShapeKind.GROUP or bool(geom.parts)
 
 
 # Literal strings some models emit where the schema means JSON null.
@@ -348,10 +536,26 @@ def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
     The domain validators (GeometrySpec) are NOT loosened — we only pre-process
     the raw dict before handing it to Pydantic.
     """
+    salvaged_truncation = False
     try:
         data: dict[str, Any] = json.loads(raw_json)
     except json.JSONDecodeError:
-        return None
+        # Truncation salvage (repair step 0): the reply may have overrun the
+        # output-token cap and been cut mid `parts`/`solids`. Recover the
+        # complete leading elements; a 6-part car beats a NOOP.
+        repaired_text = _repair_truncated_json(raw_json)
+        if repaired_text is None:
+            return None
+        try:
+            data = json.loads(repaired_text)
+        except json.JSONDecodeError:
+            return None
+        salvaged_truncation = True
+        _log.warning(
+            "llm_truncated_payload_salvaged",
+            raw_chars=len(raw_json),
+            kept_chars=len(repaired_text),
+        )
     if not isinstance(data, dict):
         return None
 
@@ -390,22 +594,27 @@ def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
                     solid[key] = _clamp(float(solid[key]), 0.001, 100.0)
 
     # First attempt: validate the full payload as-is (post-clamp)
+    payload: _LLMPayload | None = None
     try:
-        return _LLMPayload.model_validate(data)
+        payload = _LLMPayload.model_validate(data)
     except (ValidationError, ValueError):
         pass
 
     # Second attempt: salvage — if geometry is a group, try dropping bad parts
-    if isinstance(data.get("geometry"), dict):
+    if payload is None and isinstance(data.get("geometry"), dict):
         salvaged_geom = _salvage_group_parts(data["geometry"])
         if salvaged_geom is not None:
             try:
                 repaired = {**data, "geometry": salvaged_geom.model_dump(mode="python")}
-                return _LLMPayload.model_validate(repaired)
+                payload = _LLMPayload.model_validate(repaired)
             except (ValidationError, ValueError):
                 pass
 
-    return None
+    if payload is None:
+        return None
+    if salvaged_truncation and not _has_recovered_content(payload):
+        return None  # salvage kept nothing drawable — let the corrective retry run
+    return payload
 
 
 class _SolidSpec(BaseModel):
