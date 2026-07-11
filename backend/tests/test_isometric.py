@@ -11,6 +11,9 @@ Covers:
 - Empty input → None; unknown shape → ignored/None.
 - Fit guarantee: coordinates in [0, 100] even for far-placed/large solids.
 - Determinism: same input → identical output (called twice).
+- Sphere: body ELLIPSE (perfect circle) + lighter _L_TOP highlight, depth-sort
+  participation, cap chunking. Hemisphere: dome PATH + highlight.
+- max_parts: the soft cap is a parameter (Settings.max_scene_parts seam).
 """
 
 from __future__ import annotations
@@ -494,3 +497,181 @@ def test_part_cap_never_splits_a_cylinder_pair() -> None:
     n_paths = sum(1 for p in result.parts if p.kind is ShapeKind.PATH)
     n_ellipses = sum(1 for p in result.parts if p.kind is ShapeKind.ELLIPSE)
     assert n_paths == n_ellipses  # no half-cylinder
+
+
+# ---------------------------------------------------------------------------
+# Sphere: circle body + lighter highlight, same shading language as box/cyl.
+# ---------------------------------------------------------------------------
+
+
+def test_sphere_produces_body_and_highlight() -> None:
+    s = Solid(shape="sphere", x=20, y=20, z=20, w=30, d=30, h=30, name="ball")
+    result = project_solids([s])
+    assert result is not None
+    assert result.kind is ShapeKind.GROUP
+    assert [p.name for p in result.parts] == ["ball-body", "ball-highlight"]
+    assert all(p.kind is ShapeKind.ELLIPSE for p in result.parts)
+
+
+def test_sphere_body_is_a_perfect_circle() -> None:
+    """The projection P satisfies P·Pᵀ = 1.5·I, so a sphere projects to a
+    CIRCLE (equal semi-axes) — not a squashed ellipse."""
+    s = Solid(shape="sphere", x=10, y=10, z=10, w=24, d=24, h=24)
+    result = project_solids([s])
+    assert result is not None
+    body = result.parts[0]
+    assert abs(body.width - body.height) < 1e-6
+
+
+def test_sphere_shading_bands() -> None:
+    """Body fill sits at the _L_MID band; the highlight at _L_TOP (lighter),
+    both keeping the solid's hue — the box/cylinder shading language."""
+    s = Solid(shape="sphere", x=20, y=20, z=20, w=30, d=30, h=30, color="#dc2626")
+    result = project_solids([s])
+    assert result is not None
+    body, highlight = result.parts
+    assert body.fill is not None and highlight.fill is not None
+    assert abs(_lightness(body.fill) - 0.55) < 0.02       # _L_MID
+    assert abs(_lightness(highlight.fill) - 0.80) < 0.02  # _L_TOP
+    assert abs(_hue(body.fill) - _hue("#dc2626")) < 0.05  # hue preserved
+    # highlight paints ON TOP of the body (later in painter's order)
+    assert _lightness(highlight.fill) > _lightness(body.fill)
+
+
+def test_sphere_highlight_sits_up_left_inside_body() -> None:
+    s = Solid(shape="sphere", x=0, y=0, z=0, w=30, d=30, h=30)
+    result = project_solids([s])
+    assert result is not None
+    body, highlight = result.parts
+    assert highlight.x < body.x and highlight.y < body.y  # toward the light
+    assert highlight.width < body.width                    # a sheen, not a face
+
+
+def test_sphere_participates_in_depth_sort() -> None:
+    """A far sphere paints BEFORE a near box; a near sphere paints AFTER."""
+    far_sphere = Solid(shape="sphere", x=0, y=0, z=0, w=20, d=20, h=20, name="far")
+    near_box = Solid(shape="box", x=50, y=50, z=50, w=20, d=20, h=20, name="near")
+    result = project_solids([far_sphere, near_box])
+    assert result is not None
+    names = [p.name or "" for p in result.parts]
+    assert names.index("far-body") < names.index("near-top")
+
+    near_sphere = Solid(shape="sphere", x=50, y=50, z=50, w=20, d=20, h=20, name="near")
+    far_box = Solid(shape="box", x=0, y=0, z=0, w=20, d=20, h=20, name="far")
+    result2 = project_solids([near_sphere, far_box])
+    assert result2 is not None
+    names2 = [p.name or "" for p in result2.parts]
+    assert names2.index("far-top") < names2.index("near-body")
+
+
+def test_sphere_fits_and_renders() -> None:
+    s = Solid(shape="sphere", x=80, y=80, z=80, w=90, d=90, h=90)
+    result = project_solids([s])
+    assert result is not None
+    for p in result.parts:
+        assert 0.0 <= p.x <= 100.0 and 0.0 <= p.y <= 100.0
+        assert p.width <= 100.0 and p.height <= 100.0
+    assert _render_svg(result).startswith("<svg")
+
+
+def test_sphere_determinism() -> None:
+    s = Solid(shape="sphere", x=5, y=5, z=5, w=25, d=25, h=25, color="#2563eb")
+    assert project_solids([s]) == project_solids([s])
+
+
+def test_part_cap_never_splits_a_sphere_pair() -> None:
+    """Like the cylinder body/top pair, a sphere's body+highlight chunk is
+    dropped or kept WHOLE — every surviving body has its highlight."""
+    solids = [
+        Solid(shape="sphere", x=i * 3.0, y=0, z=i * 3.0, w=5, d=5, h=5, name=f"s-{i}")
+        for i in range(35)  # 35 spheres * 2 parts = 70 > 60
+    ]
+    result = project_solids(solids)
+    assert result is not None
+    assert len(result.parts) <= 60
+    bodies = {
+        (p.name or "").removesuffix("-body")
+        for p in result.parts
+        if "-body" in (p.name or "")
+    }
+    highlights = {
+        (p.name or "").removesuffix("-highlight")
+        for p in result.parts
+        if "-highlight" in (p.name or "")
+    }
+    assert bodies == highlights  # no orphaned half-sphere
+    assert "s-34" in bodies      # nearest kept
+    assert "s-0" not in bodies   # farthest dropped
+
+
+# ---------------------------------------------------------------------------
+# Hemisphere: dome PATH closed by the near base half-ellipse + highlight.
+# ---------------------------------------------------------------------------
+
+
+def test_hemisphere_produces_dome_and_highlight() -> None:
+    s = Solid(shape="hemisphere", x=20, y=0, z=20, w=30, d=30, h=18, name="dome")
+    result = project_solids([s])
+    assert result is not None
+    assert [p.name for p in result.parts] == ["dome-dome", "dome-highlight"]
+    dome, highlight = result.parts
+    assert dome.kind is ShapeKind.PATH
+    assert highlight.kind is ShapeKind.ELLIPSE
+    assert dome.d is not None
+    pathdata.parse(dome.d)  # the dome path honours the constrained contract
+
+
+def test_hemisphere_shading_and_render() -> None:
+    s = Solid(shape="hemisphere", x=10, y=0, z=10, w=40, d=40, h=20, color="#2563eb")
+    result = project_solids([s])
+    assert result is not None
+    dome, highlight = result.parts
+    assert dome.fill is not None and highlight.fill is not None
+    assert abs(_lightness(dome.fill) - 0.55) < 0.02       # _L_MID
+    assert abs(_lightness(highlight.fill) - 0.80) < 0.02  # _L_TOP
+    assert _render_svg(result).startswith("<svg")
+
+
+def test_hemisphere_stacks_on_a_box() -> None:
+    """A dome on a box (igloo-on-base): near dome paints after the far box."""
+    solids = [
+        Solid(shape="box", x=0, y=0, z=0, w=30, d=30, h=10, name="base"),
+        Solid(shape="hemisphere", x=5, y=10, z=5, w=20, d=20, h=12, name="roof"),
+    ]
+    result = project_solids(solids)
+    assert result is not None
+    names = [p.name or "" for p in result.parts]
+    assert "roof-dome" in names and "base-top" in names
+    assert _render_svg(result).startswith("<svg")
+
+
+# ---------------------------------------------------------------------------
+# max_parts: the soft cap is a parameter (Settings.max_scene_parts seam).
+# ---------------------------------------------------------------------------
+
+
+def test_max_parts_parameter_raises_the_cap() -> None:
+    """With max_parts=90 a 75-face assembly survives whole (the GeometrySpec
+    hard ceiling is 120); the default still truncates to <= 60."""
+    solids = [
+        Solid(shape="box", x=i * 4.0, y=0, z=i * 4.0, w=6, d=6, h=6, name=f"box-{i}")
+        for i in range(25)  # 75 faces
+    ]
+    default = project_solids(solids)
+    assert default is not None and len(default.parts) <= 60
+    raised = project_solids(solids, max_parts=90)
+    assert raised is not None and len(raised.parts) == 75
+
+
+def test_max_parts_parameter_lowers_the_cap() -> None:
+    """A lower cap keeps only the NEAREST whole chunks."""
+    solids = [
+        Solid(shape="box", x=i * 4.0, y=0, z=i * 4.0, w=6, d=6, h=6, name=f"box-{i}")
+        for i in range(5)  # 15 faces
+    ]
+    result = project_solids(solids, max_parts=6)
+    assert result is not None
+    assert len(result.parts) == 6  # two whole boxes
+    names = {p.name for p in result.parts}
+    assert any(n and n.startswith("box-4-") for n in names)   # nearest kept
+    assert not any(n and n.startswith("box-0-") for n in names)  # farthest dropped

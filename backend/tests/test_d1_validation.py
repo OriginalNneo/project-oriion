@@ -178,9 +178,7 @@ def test_repair_geometry_dict_recurses_into_parts() -> None:
         "y": 50.0,
         "width": 60.0,
         "height": 60.0,
-        "parts": [
-            {"kind": "rectangle", "x": 150.0, "y": 50.0, "width": 40.0, "height": 30.0}
-        ],
+        "parts": [{"kind": "rectangle", "x": 150.0, "y": 50.0, "width": 40.0, "height": 30.0}],
     }
     _repair_geometry_dict(raw)
     assert raw["parts"][0]["x"] == 100.0
@@ -251,7 +249,9 @@ async def test_full_classify_clamped_geometry(monkeypatch: pytest.MonkeyPatch) -
     )
     clf = _make_clf()
 
-    async def _fake_complete(text: str, context: object, *, references: object = None) -> str:
+    async def _fake_complete(
+        text: str, context: object, *, references: object = None, tier: object = None
+    ) -> str:
         return bad_json
 
     clf._complete = _fake_complete  # type: ignore[method-assign]
@@ -356,7 +356,9 @@ async def test_full_classify_salvage_group(monkeypatch: pytest.MonkeyPatch) -> N
     )
     clf = _make_clf()
 
-    async def _fake_complete(text: str, context: object, *, references: object = None) -> str:
+    async def _fake_complete(
+        text: str, context: object, *, references: object = None, tier: object = None
+    ) -> str:
         return bad_group_json
 
     clf._complete = _fake_complete  # type: ignore[method-assign]
@@ -383,7 +385,7 @@ async def test_corrective_retry_called_exactly_once_on_bad_reply() -> None:
 
     clf = _make_clf()
 
-    async def _fake_send(messages: list[dict[str, str]]) -> str:
+    async def _fake_send(messages: list[dict[str, str]], *, tier: object = None) -> str:
         send_calls.append(messages)
         if len(send_calls) == 1:
             # First call: totally invalid JSON
@@ -421,7 +423,7 @@ async def test_two_bad_replies_produce_noop_no_extra_retries() -> None:
 
     clf = _make_clf()
 
-    async def _fake_send(messages: list[dict[str, str]]) -> str:
+    async def _fake_send(messages: list[dict[str, str]], *, tier: object = None) -> str:
         send_calls.append(1)
         return "not json at all"  # always bad
 
@@ -460,10 +462,8 @@ async def test_groq_request_carries_max_tokens() -> None:
     # the transport at the module level — easier: replace _complete with a full
     # reimplementation that uses a mock transport.
 
-    async def _patched_send(messages: list[dict[str, str]]) -> str:
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler), timeout=5.0
-        ) as client:
+    async def _patched_send(messages: list[dict[str, str]], *, tier: object = None) -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=5.0) as client:
             resp = await LLMClassifier._post_with_retry(
                 client,
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -512,7 +512,9 @@ async def test_groq_send_includes_max_tokens_via_mock_transport() -> None:
 
     call_count = 0
 
-    async def _fake_complete(text: str, context: object, *, references: object = None) -> str:
+    async def _fake_complete(
+        text: str, context: object, *, references: object = None, tier: object = None
+    ) -> str:
         nonlocal call_count
         call_count += 1
         # Reconstruct what _send does, but with the mock transport
@@ -521,9 +523,7 @@ async def test_groq_send_includes_max_tokens_via_mock_transport() -> None:
             {"role": "system", "content": "sys"},
             {"role": "user", "content": user},
         ]
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(handler), timeout=5.0
-        ) as client:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=5.0) as client:
             resp = await LLMClassifier._post_with_retry(
                 client,
                 "https://api.groq.com/openai/v1/chat/completions",

@@ -107,19 +107,48 @@ _UNDO_RE = re.compile(
     | \bscratch\s+that\b                 # "scratch that"
     | \bnever\s*mind\b                   # "never mind" / "nevermind"
     | \bzoom\s+(?:back\s+)?out\b         # "zoom out" / "zoom back out"
-    | \b(?:go\s+back\s+to\s+the\s+)?
-      previous\s+(?:one|version|situation|step|state)\b
-                                         # "previous one/version/…"
+    | \bback\s+to\s+the\s+(?:previous|last|prior)\b
+                                         # "back to the last one" (no "go")
+    | \b(?:the\s+)?(?:previous|last|prior)\s+
+      (?:one|version|situation|step|state|iteration)s?\b
+                                         # "previous iteration", "last one", …
     """,
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Bare nav-noun forms of the vocabulary above ("the last one", "previous
+# iteration"). When a PRUNE verb is present ("delete the last one") these are
+# a deletion target, not a go-back — branch 0 must yield to the prune branch.
+_UNDO_NAV_ONLY_RE = re.compile(
+    r"""
+    \bback\s+to\s+the\s+(?:previous|last|prior)\b
+    | \b(?:the\s+)?(?:previous|last|prior)\s+
+      (?:one|version|situation|step|state|iteration)s?\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_UNDO_EXPLICIT_RE = re.compile(
+    r"\bundo\b|\bgo\s+back\b|\brevert\b|\bscratch\s+that\b"
+    r"|\bnever\s*mind\b|\bzoom\s+(?:back\s+)?out\b",
+    re.IGNORECASE,
+)
+
+# Generic navigation words: in "go back to the previous iteration" / "back to
+# the last one" they name a POSITION in history, never a node. They must be
+# invisible to the directed-guard's label/shape resolution so a stem-collision
+# (e.g. "state" ↔ a node labelled "star") can't hijack an UNDO into a dead end.
+_UNDO_NAV_WORDS_RE = re.compile(
+    r"\b(?:previous|last|prior|iteration|iterations|one|ones|version|versions|"
+    r"situation|step|steps|state|states)\b",
+    re.IGNORECASE,
+)
+
 # Phrases that ARE undo-like but contain a resolvable label/shape reference
-# ("go back to the cat") — the guard below checks for these so we can fall
-# through to existing FOCUS/label-resolution branches.  The guard fires only
+# ("go back to the cat") — the guard below checks for these so we can emit a
+# directed FOCUS on the resolved node instead of UNDO. The guard fires only
 # when a definite reference word (after "to the …") matches a candidate node.
 _UNDO_TO_RE = re.compile(
-    r"\bgo\s+back\s+to\s+(?:the|this|that)\b",
+    r"\b(?:go\s+)?back\s+to\s+(?:the|this|that)\b",
     re.IGNORECASE,
 )
 
@@ -156,6 +185,7 @@ _KNOWN_WORDS: frozenset[str] = frozenset(
     | {w for phrase, _ in _PREFERENCE_PHRASES for w in phrase.replace("'", " ").split()}
     | {"remove", "delete", "scrap", "discard", "prune", "connect", "link", "attach", "radius"}
     | {"undo", "revert", "scratch", "nevermind", "previous", "situation", "step", "state", "zoom"}
+    | {"last", "prior", "iteration", "iterations"}  # §14 go-back nav vocabulary
     | set(NAMED_SHAPES)          # R4: named-shape words are known vocabulary
     | {w + "s" for w in NAMED_SHAPES}   # R4: plurals ("hexagons", "arrows", …)
     | {"some"}  # common quantifier often paired with shape words
@@ -296,21 +326,45 @@ class RulesClassifier:
         # meaning; extra filler words ("I don't really like it, never mind") must
         # not reduce confidence.
         #
-        # GUARD: if the utterance contains "go back to the <X>" where <X>
-        # resolves to a known label or shape, fall through so the existing
-        # FOCUS/label-resolution branches handle it ("go back to the cat" is a
-        # FOCUS, not an UNDO).
-        if _UNDO_RE.search(lowered):
-            # Run the guard: does this look like "go back to a specific node"?
-            is_directed = False
+        # GUARD 1 (prune): the bare nav-noun forms ("the last one", "previous
+        # version") name a deletion target when a prune verb is present —
+        # "delete the last one" must reach the PRUNE branch, not fire UNDO.
+        # Explicit undo verbs ("undo", "go back", …) are immune to this guard.
+        #
+        # GUARD 2 (directed): if the utterance contains "(go) back to the <X>"
+        # where <X> resolves to a known label or shape, this is a directed
+        # focus move ("go back to the cat"), not an UNDO — emit FOCUS on the
+        # resolved node. Generic nav words (previous/last/iteration/one/…) are
+        # stripped before resolution so they can never stem-match a label and
+        # leave the utterance stranded between UNDO and FOCUS.
+        undo_hit = _UNDO_EXPLICIT_RE.search(lowered) is not None or (
+            _UNDO_NAV_ONLY_RE.search(lowered) is not None
+            and _PRUNE_RE.search(lowered) is None
+        )
+        if undo_hit:
+            directed_target: str | None = None
             if _UNDO_TO_RE.search(lowered):
-                # Check whether a label or shape word after "to the" resolves.
-                if self._resolve_by_label(lowered, context) is not None:
-                    is_directed = True
-                elif self._resolve_named(self._find_shape(lowered), context) is not None:
-                    is_directed = True
-            if not is_directed:
+                # Check whether a label or shape word after "to the" resolves —
+                # nav words are invisible to this check.
+                guard_text = _UNDO_NAV_WORDS_RE.sub(" ", lowered)
+                directed_target = self._resolve_by_label(guard_text, context)
+                if directed_target is None:
+                    directed_target = self._resolve_named(
+                        self._find_shape(guard_text), context
+                    )
+            if directed_target is None:
                 return op(op_type=OpType.UNDO, confidence=0.9)
+            # Directed go-back with NO other work attached is a plain FOCUS on
+            # the named node. If modifiers ride along ("go back to the circle
+            # and make it red") fall through so the MODIFY branches handle it
+            # — the pre-fix behavior for such phrases.
+            if not self._find_modifiers(lowered):
+                return op(
+                    op_type=OpType.FOCUS,
+                    target_node_id=directed_target,
+                    preference_signal=0.0,
+                    confidence=0.8,
+                )
 
         # 1) preference signal -> FOCUS (positive) or disaffirm (negative). If
         # the utterance *names* a shape ("go with the triangle"), resolve it
