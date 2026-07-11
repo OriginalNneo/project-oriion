@@ -69,7 +69,7 @@ You turn ONE spoken utterance from a live collaborative design session into ONE 
 Schema:
 {
   "op_type": "create|branch|modify|focus|prune|connect|noop",
-  "target_shape": "rectangle|circle|triangle|ellipse|line|polygon|path|text|group|node|edge|null",
+  "target_shape": "rectangle|circle|triangle|ellipse|line|polygon|path|text|group|node|edge" or JSON null — never the STRING "null",
   "target_node_id": "<id from context.candidates or null>",
   "relation_to_node": "<second node id, only for connect, else null>",
   "modifiers": ["fillet", "radius:8", "bigger", "smaller", "color:#dc2626"],
@@ -97,7 +97,7 @@ Rules:
 - "create" for a new idea; "branch" when it's a variant of the current focus; "modify" to change an existing node (set target_node_id from context); "focus" for preferences (preference_signal: "let's go with"≈1, "maybe"≈0.3, rejection negative); "prune" to remove; "connect" to link two existing nodes; "noop" if it is not a design intent.
 - create vs modify: a NEW standalone object or arrangement ("a cube", "a smartphone", "a 3D engine", "a bicycle", "two spheres", "three boxes in a row") is ALWAYS "create" — even when a focus exists. Only pick "modify" when the words explicitly refer back to the current design using words like "add ...", "give it ...", "put a ... on it", "make it ...", "now ... to it". When in doubt, CREATE — replacing someone's idea is worse than adding a new card.
 - COLOR: "stroke" is the outline; "fill" colors the body. When the speaker asks for color ("a red scarf", "colored in", "fill it in green"), set BOTH per part: fill = the color, fill_style = "solid" (or "hachure" for a sketchy fill), and keep the stroke a darker tone of it. No color mentioned → stroke #1f2937, fill null.
-- TRUE 3D — PREFER "solids" for anything volumetric ("a 3D box/cube", "a cylinder", "an isometric engine", "a wedge/ramp", any solid or assembly of solids). Emit op_type "create" (or "modify" to rebuild the focus as 3D), set "geometry" and "patch" to null, and give a "solids" list. Each solid is an axis-aligned block placed in a RELATIVE 3D space — x→right, y→UP, z→toward you (depth); (x,y,z) is its near-bottom-left corner and (w,d,h) its size along x / z / y. ONLY relative position and size matter: the system does the exact 30° isometric projection, face shading (light top, medium front, dark side), hidden-face removal and depth-sorting, then centers and scales the whole result. Build an assembly by OVERLAPPING and stacking solids into one connected body (a piston engine = one wide block box with cylinders sitting on its top face, example J). "sphere" is a ball inscribed in its (w,d,h) box (a snowman body, a planet); "hemisphere" is a dome resting flat-side-down at y (an igloo, a radar dome). A spoken "sphere"/"hemisphere"/"orb" is ALWAYS a solid, NEVER a flat circle — "two spheres and a bigger sphere" = THREE sphere solids in ONE list (Example K); "a snowman out of spheres" = three sphere solids stacked along y. Give each solid its own "color" and a "name". Do NOT compute faces or projection yourself when you use solids — that is the system's job.
+- TRUE 3D — PREFER "solids" for anything volumetric ("a 3D box/cube", "a cylinder", "an isometric engine", "a wedge/ramp", any solid or assembly of solids). Emit op_type "create" (or "modify" to rebuild the focus as 3D), set "target_shape" to "group", set "geometry" and "patch" to null, and give a "solids" list — even for a SINGLE solid ("a 3D sphere" = a one-element list). Map the spoken solid to the closest shape: a ramp/doorstop/(triangular) prism → "wedge"; a can/tube/pipe/rod → "cylinder"; a ball/orb/planet → "sphere"; a dome/igloo → "hemisphere"; a cube/block → "box". Each solid is an axis-aligned block placed in a RELATIVE 3D space — x→right, y→UP, z→toward you (depth); (x,y,z) is its near-bottom-left corner and (w,d,h) its size along x / z / y. ONLY relative position and size matter: the system does the exact 30° isometric projection, face shading (light top, medium front, dark side), hidden-face removal and depth-sorting, then centers and scales the whole result. Build an assembly by OVERLAPPING and stacking solids into one connected body (a piston engine = one wide block box with cylinders sitting on its top face, example J). "sphere" is a ball inscribed in its (w,d,h) box (a snowman body, a planet); "hemisphere" is a dome resting flat-side-down at y (an igloo, a radar dome). A spoken "sphere"/"hemisphere"/"orb" is ALWAYS a solid, NEVER a flat circle — "two spheres and a bigger sphere" = THREE sphere solids in ONE list (Example K); "a snowman out of spheres" = three sphere solids stacked along y. Give each solid its own "color" and a "name". Do NOT compute faces or projection yourself when you use solids — that is the system's job.
 - 3D by hand (only when "solids" can't express it — a single tilted panel, a wireframe): draw the 2-3 VISIBLE faces as polygons sharing edges, offset up-right (Example E); never draw hidden faces or stack axis-aligned rectangles. Fills ON, three shades: light top (#e5e7eb), medium front (#9ca3af), dark side (#6b7280). For real solids/assemblies prefer "solids" above — its projection is exact.
 - MULTI-OBJECT scenes: a counted arrangement ("two spheres and a bigger sphere", "three boxes in a row") is ONE "create" containing ALL N objects — count them in your output; never fewer, and never a "modify" of the focus. SIZE words are quantitative: "bigger"/"big" means ≥ 1.5x the diameter of its plain neighbours, "small"/"little" ≤ 0.6x — after placing your numbers, re-check that the comparative object really IS the largest/smallest in the scene. NO size word ("three spheres in a row") = ALL IDENTICAL sizes, evenly spaced; a "row" of solids shares one ground y and one depth z, spread along x. DISTINCT side-by-side objects NEVER overlap: leave a visible gap between their boxes ("in the middle"/"between" = the middle object centered with the others flanking it symmetrically); overlap only what physically attaches (a snowman's stacked spheres sink slightly into each other). Keep every object fully inside the canvas: center ± half-size stays within 0..100.
 - GEOMETRIC RELATIONS are exact — compute the numbers, never just place shapes near each other:
@@ -261,6 +261,86 @@ def _salvage_group_parts(raw: dict[str, Any]) -> GeometrySpec | None:
         return None
 
 
+# Literal strings some models emit where the schema means JSON null.
+_NULL_STRINGS: frozenset[str] = frozenset({"", "null", "none"})
+
+# The solid-shape vocabulary `project_solids` understands, plus a deterministic
+# synonym map so a spoken "prism"/"ball"/"tube" still lands on a projectable
+# solid. Anything else defaults to "box" — a volumetric request must never die
+# on a naming quibble ("model proposes, code disposes").
+_KNOWN_SOLID_SHAPES: frozenset[str] = frozenset(
+    {"box", "cylinder", "wedge", "sphere", "hemisphere"}
+)
+_SOLID_SHAPE_SYNONYMS: dict[str, str] = {
+    "cube": "box",
+    "block": "box",
+    "cuboid": "box",
+    "rectangular prism": "box",
+    "prism": "wedge",
+    "triangular prism": "wedge",
+    "ramp": "wedge",
+    "doorstop": "wedge",
+    "ball": "sphere",
+    "orb": "sphere",
+    "globe": "sphere",
+    "tube": "cylinder",
+    "can": "cylinder",
+    "pipe": "cylinder",
+    "rod": "cylinder",
+    "disc": "cylinder",
+    "disk": "cylinder",
+    "dome": "hemisphere",
+    "half-sphere": "hemisphere",
+    "half sphere": "hemisphere",
+}
+
+_SHAPE_KIND_VALUES: frozenset[str] = frozenset(k.value for k in ShapeKind)
+
+
+def _normalize_solid_shape(shape: str) -> str:
+    """Map a model-emitted solid shape onto the projector's vocabulary."""
+    s = shape.strip().lower()
+    if s in _KNOWN_SOLID_SHAPES:
+        return s
+    return _SOLID_SHAPE_SYNONYMS.get(s, "box")
+
+
+def _normalize_payload_fields(data: dict[str, Any]) -> None:
+    """Deterministic pre-validation cleanup of known model quirks (in place).
+
+    The dominant 3D failure (measured 2026-07-11): gemini-2.5-flash-lite emits
+    the STRING "null" for target_shape on single-solid answers (reading the
+    schema's "...|null" literally), which failed ShapeKind validation and threw
+    away otherwise-perfect solids payloads — and the temperature-0 corrective
+    retry repeated the same string. Salvage, don't reject:
+      * literal "null"/"none" strings in nullable fields become JSON null;
+      * a target_shape outside the ShapeKind vocabulary (it is advisory only)
+        degrades to None instead of failing the whole payload;
+      * a bare solids OBJECT is accepted as a one-element list;
+      * solid shapes are synonym-normalized (prism→wedge, ball→sphere, …) so
+        every solids payload projects to SOMETHING valid.
+    """
+    for key in ("target_shape", "target_node_id", "relation_to_node", "label"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip().lower() in _NULL_STRINGS:
+            data[key] = None
+    shape = data.get("target_shape")
+    if isinstance(shape, str) and shape.strip().lower() not in _SHAPE_KIND_VALUES:
+        data["target_shape"] = None
+    if isinstance(data.get("solids"), dict):
+        data["solids"] = [data["solids"]]
+    if isinstance(data.get("solids"), list):
+        for solid in data["solids"]:
+            if not isinstance(solid, dict):
+                continue
+            if isinstance(solid.get("shape"), str):
+                solid["shape"] = _normalize_solid_shape(solid["shape"])
+            for key in ("color", "name"):
+                value = solid.get(key)
+                if isinstance(value, str) and value.strip().lower() in _NULL_STRINGS:
+                    solid[key] = None
+
+
 def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
     """Parse the LLM's raw JSON string, applying the clamp+salvage repair pass.
 
@@ -272,6 +352,12 @@ def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
         data: dict[str, Any] = json.loads(raw_json)
     except json.JSONDecodeError:
         return None
+    if not isinstance(data, dict):
+        return None
+
+    # Normalize known model quirks (string-"null", solid-shape synonyms, bare
+    # solids object) before any validation — the 3D-invalid fix (seg 1).
+    _normalize_payload_fields(data)
 
     # Clamp geometry fields before validation
     if isinstance(data.get("geometry"), dict):

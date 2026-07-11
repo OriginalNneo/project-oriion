@@ -214,6 +214,38 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Refinement loop — Segment 1: 3D-solids emission fixed — DONE (2026-07-11,
+  branch drawing-quality-d3; Fable-5 fixer subagent; ruff + mypy strict, 687
+  tests, +6 keyless `test_seg1_*` guards).** The whole non-trivial 3D path was
+  returning invalid geometry — **root cause: gemini-2.5-flash-lite emitted the
+  LITERAL STRING `"null"` for `target_shape`** on single-solid answers (copying
+  the schema line's `...|edge|null`), which failed `ShapeKind` validation and
+  discarded an otherwise-perfect `solids` payload; the temp-0 corrective retry
+  repeated the same string. Multi-solid prompts survived only by copying
+  `"group"` from examples J/K.
+  - Fix (model-facing only; projectors in `isometric.py` untouched — "code
+    disposes"): NEW `_normalize_payload_fields` + `_normalize_solid_shape` run at
+    the top of `_parse_and_repair` in `pipeline/llm.py` — literal `"null"/"none"`
+    strings → JSON null; out-of-vocab `target_shape` degrades to `None`; a bare
+    solid object is wrapped as a one-element list; shape synonyms normalize
+    (prism/ramp/doorstop→wedge, ball/orb→sphere, tube/can→cylinder, cube→box,
+    dome→hemisphere) with unknown → box so a 3D prompt NEVER returns invalid.
+    `_SYSTEM_PROMPT` clarified (target_shape is JSON null "never the STRING",
+    single solid → one-element list, spoken-word→shape map).
+  - **Verified INDEPENDENTLY (orchestrator re-measured, not the subagent's
+    self-report):** TUNING strict **0.764 → 0.913** (validity 12/12, solids
+    4/4); HELDOUT strict **0.567 → ~0.79** (validity ~9-10/10, solids 4/4).
+    Every previously-invalid 3D prompt (wedge/ramp/cylinder/prism/sphere) now
+    scores 1.00 across 3 runs. NOTE: the subagent reported held-out 0.938 — a
+    lucky single draw; the count/relation prompts are HIGH-VARIANCE at temp 0
+    (e.g. "a car with four wheels" flips 1.00↔0.00 on slow ~17 s responses), so
+    the honest held-out is ~0.79.
+  - **Accepted despite a count dip** (robot 0.83→0.62, snowman 0.83→0.67 on
+    tuning): net strict rose +0.15 / +0.22, locked regression set fully green,
+    held-out far better — the dip is on the noisy `count` dimension, which is
+    Segment 2's explicit target. **Stop gate (held-out ≥ 0.90) NOT yet met (~0.79)
+    → loop continues.** Next weakness = count/relation fidelity + its variance.
+  - Files: `quorum/pipeline/llm.py`, `tests/test_refinement_regression.py`.
 - **Drawing-quality refinement loop — Segment 0: fitness instrument + honest
   baseline — DONE (2026-07-11, branch drawing-quality-d3; ruff + mypy strict,
   +4 keyless regression tests).** Kicks off an autonomous, resumable loop
