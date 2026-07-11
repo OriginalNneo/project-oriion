@@ -30,6 +30,7 @@ from quorum.domain.geometry import FillStyle, GeometrySpec, ShapeKind
 from quorum.domain.isometric import Solid, project_solids
 from quorum.domain.op import ClassifierContext, OpType
 from quorum.eval.adherence import AdherenceScore, Expectation, Relation, score
+from quorum.eval.battery import SETS
 from quorum.pipeline.llm import LLMClassifier
 from quorum.pipeline.renderer import SvgRenderer
 
@@ -43,31 +44,10 @@ _DEFAULT_MODELS = [
     "openai/gpt-oss-20b",                    # small reasoning model
 ]
 
-# The fixed adherence prompt set — each annotated with machine-checkable
-# expectations. Single-shot CREATEs (no follow-up dependency), so an empty
-# context is correct; we force the LLM stage to isolate model quality.
-PROMPTS: list[tuple[str, Expectation]] = [
-    ("a house with a door and two windows",
-     Expectation(counts={"window": 2, "door": 1}, min_parts=4)),
-    ("a robot with an antenna and two wheels",
-     Expectation(counts={"wheel": 2, "antenna": 1}, min_parts=4)),
-    ("a funnel turned on its side with five thrusters",
-     Expectation(counts={"thruster": 5}, min_parts=6)),
-    ("a simple car, colored blue",
-     Expectation(colors=("blue",), colored_in=True, min_parts=3)),
-    ("a five-pointed star colored yellow",
-     Expectation(colors=("yellow",), colored_in=True, min_parts=1)),
-    ("a coffee mug with a handle, colored in",
-     Expectation(counts={"handle": 1}, colored_in=True, min_parts=3)),
-    ("a snowman wearing a red scarf and a blue hat",
-     Expectation(counts={"scarf": 1, "hat": 1}, colors=("red", "blue"), min_parts=4)),
-    ("a blue circle inside a red square",
-     Expectation(colors=("blue", "red"),
-                 relations=(Relation("inside", "circle", "square"),), min_parts=2)),
-    ("a 3D cube", Expectation(expect_3d=True, min_parts=3)),
-    ("a 3D engine with three pistons", Expectation(expect_3d=True, min_parts=4)),
-    ("a wedge ramp in 3D", Expectation(expect_3d=True, min_parts=2)),
-]
+# The adherence prompt set now lives in ``quorum.eval.battery`` (tuning/held-out
+# split for the refinement loop); select one with ``--set``. Each prompt is a
+# single-shot CREATE annotated with machine-checkable expectations, so an empty
+# context is correct and the LLM stage is isolated to model quality.
 
 # OpenRouter passes through per-model upstream 429s; the cheapest models throttle
 # rapid calls (≈10 req/min). Pace generously (--pace) to stay under the cap; a
@@ -92,7 +72,13 @@ def _agg(scores: list[AdherenceScore], dim: str) -> float | None:
     return round(statistics.mean(vals), 2) if vals else None
 
 
-async def _eval_model(model: str, api_key: str, pace_s: float, verbose: bool) -> dict[str, object]:
+async def _eval_model(
+    model: str,
+    api_key: str,
+    pace_s: float,
+    verbose: bool,
+    prompts: list[tuple[str, Expectation]],
+) -> dict[str, object]:
     clf = LLMClassifier(
         backend=Backend.OPENROUTER, model=model, api_key=api_key, record_diagnostics=True
     )
@@ -101,7 +87,7 @@ async def _eval_model(model: str, api_key: str, pace_s: float, verbose: bool) ->
     latencies: list[float] = []
     solids_used = 0
     solids_prompts = 0
-    for i, (text, expect) in enumerate(PROMPTS):
+    for i, (text, expect) in enumerate(prompts):
         op = None
         dt = 0.0
         for attempt in range(_RETRIES + 1):
@@ -137,9 +123,14 @@ async def _eval_model(model: str, api_key: str, pace_s: float, verbose: bool) ->
     # which also skip invalid rows; the `validity` column carries coverage. A
     # model is not double-penalised for a NOOP in both columns (review find).
     valid_overall = [s.overall for s in scores if s.valid]
+    # Strict-overall: an INVALID (no-geometry) row counts as 0.0, so an outright
+    # failure (e.g. a 3D wedge the model can't produce) is not hidden the way the
+    # conditional `overall` column hides it. This is the refinement loop's fitness.
+    strict_overall = round(statistics.mean([s.overall if s.valid else 0.0 for s in scores]), 3)
     return {
         "model": model,
         "validity": f"{valid}/{len(scores)}",
+        "strict": strict_overall,
         "overall": round(statistics.mean(valid_overall), 2) if valid_overall else 0.0,
         "count": _agg(scores, "count"),
         "color": _agg(scores, "color"),
@@ -210,7 +201,7 @@ def _self_test() -> int:
 
 
 def _print_table(rows: list[dict[str, object]]) -> None:
-    cols = ["overall", "count", "color", "coherence", "relations", "solids3d"]
+    cols = ["strict", "overall", "count", "color", "coherence", "relations", "solids3d"]
     print(f"\n{'model':<40} {'valid':>6} {'solids':>7} "
           + " ".join(f"{c:>9}" for c in cols) + f" {'p50':>5} {'p95':>5}")
     for r in rows:
@@ -219,12 +210,14 @@ def _print_table(rows: list[dict[str, object]]) -> None:
               + f" {r['p50_s']!s:>5} {r['p95_s']!s:>5}")
 
 
-async def _run(models: list[str], pace_s: float, verbose: bool) -> int:
+async def _run(
+    models: list[str], pace_s: float, verbose: bool, prompts: list[tuple[str, Expectation]]
+) -> int:
     api_key = Settings().require_openrouter_key()
     rows = []
     for model in models:
         print(f"\n=== {model}")
-        rows.append(await _eval_model(model, api_key, pace_s, verbose))
+        rows.append(await _eval_model(model, api_key, pace_s, verbose, prompts))
     _print_table(rows)
     return 0
 
@@ -234,12 +227,16 @@ def main() -> int:
     parser.add_argument("models", nargs="*", help="OpenRouter model ids (default: cheap tier)")
     parser.add_argument("--self-test", action="store_true",
                         help="Keyless: score fixtures to verify the harness, then exit")
+    parser.add_argument("--set", choices=("tuning", "heldout", "all"), default="all",
+                        help="Which battery slice to run (default: all)")
     parser.add_argument("--pace", type=float, default=0.5, help="Seconds between calls")
     parser.add_argument("--verbose", action="store_true", help="Print per-dimension notes")
     args = parser.parse_args()
     if args.self_test:
         return _self_test()
-    return asyncio.run(_run(args.models or _DEFAULT_MODELS, args.pace, args.verbose))
+    return asyncio.run(
+        _run(args.models or _DEFAULT_MODELS, args.pace, args.verbose, SETS[args.set])
+    )
 
 
 if __name__ == "__main__":

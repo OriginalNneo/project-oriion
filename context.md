@@ -214,6 +214,39 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Drawing-quality refinement loop — Segment 0: fitness instrument + honest
+  baseline — DONE (2026-07-11, branch drawing-quality-d3; ruff + mypy strict,
+  +4 keyless regression tests).** Kicks off an autonomous, resumable loop
+  (Fable-5 reasoning subagents fix code; the OpenRouter drawing model stays
+  `gemini-2.5-flash-lite`) that drives live adherence up to a **held-out
+  strict-overall ≥ 0.90 with zero regressions**, one weakness per segment,
+  commit+push per gated segment.
+  - **Fitness = strict-overall** (mean per-prompt overall, an INVALID/no-geometry
+    row = 0.0) — unlike the D4 table's `overall`, which is conditional on a valid
+    drawing and *hid* outright 3D failures. NEW `strict` column in
+    `scripts/eval_adherence.py`.
+  - **Anti-Goodhart battery split** — NEW `quorum/eval/battery.py`: `TUNING` (12
+    prompts, the loop tunes against these) vs `HELDOUT` (10, never tuned against,
+    judges generalization + the stop gate). `eval_adherence.py --set
+    tuning|heldout|all`. Orchestrator owns the battery; fixer subagents may not
+    edit it. Measurement integrity: the eval builds `LLMClassifier` with
+    `retrieval=None`, `critique=False` → **no CREATE cache / no semantic refs in
+    the path**, and the model samples at **temperature 0** → run-to-run aggregate
+    noise ≈ 0 (verified across repeat runs).
+  - **Baseline (gemini-2.5-flash-lite, cache-free, temp 0):**
+    TUNING strict **0.764** (valid 10/12, solids 2/4);
+    HELDOUT strict **0.567** (valid 7/10, solids 1/4).
+  - **Dominant weakness = the 3D/solids path is broadly broken.** Only `a 3D
+    cube`, `a 3D engine with pistons`, `a 3D box stacked on a box` succeed; **`a
+    wedge ramp in 3D`, `a 3D cylinder`, `a 3D ramp`, `a triangular prism in 3D`,
+    `a 3D sphere` all return invalid geometry (0.00)** — yet `domain/isometric.py`
+    has working projectors for box/cylinder/wedge/sphere/hemisphere. The disposer
+    exists; the model isn't proposing valid `solids`. Secondary: relation drift
+    (`above`/`beside` → 0.50) and count drift (robot/snowman). Segment 1 targets
+    the 3D-solids emission root cause.
+  - Files: `quorum/eval/battery.py` (new), `scripts/eval_adherence.py` (--set +
+    strict), `tests/test_refinement_regression.py` (new, keyless gain-locks).
+    Plan: `~/.claude/plans/help-me-create-a-imperative-dragonfly.md`.
 - **Audio-reactive waveform + higher-fidelity UI pass — DONE (2026-07-11, branch
   drawing-quality-d3; tsc + vite build green, no new deps).** Frontend-only,
   from a live complaint ("the mic is recording but the waveform is stagnant... it
