@@ -49,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -122,6 +123,7 @@ Rules:
 - PLACEMENT words are spatial commands, not decoration. "inside X" / "in it": the new part's box lies FULLY within the existing scene's box — center it there unless told otherwise — and comes AFTER the parts it sits in, so it paints on top. "on top of X": its bottom edge touches X's top edge. "on X" in a 3D scene: it sits on the visible top face. Never drop the new part outside the scene it extends.
 - RESTYLING the current design ("make it orange", "shade it into a tabby", "give it stripes"): op_type "modify" with a "patch" — "set" entries changing ONLY stroke / fill / fill_style per part, plus "add" entries for small detail parts (stripes) when the style demands them. Detail parts stay SMALL and well-placed: stripes/spots are SEVERAL thin shapes (each height <= 4) following the body's outline near its edges — never one big block, and never covering key features (eyes, face, screen). NEVER redraw, simplify, or flatten the object: a 3D object keeps exactly its shaded faces, just re-tinted; shading = the same hue in light/medium/dark variants per face.
 - Set "label" to a 1-3 word name for the idea ("cat", "coffee mug"). On modify you may refine it ("orange cat") or leave it null to inherit the existing name.
+- COUNTED FEATURES (flat scenes): when a 2D utterance names a NUMBER of some feature ("five thrusters", "two windows", "three buttons"), emit EXACTLY that many — each as its OWN SINGLE BARE primitive (one circle/rectangle/path, NOT wrapped in a group and NOT split across several paths) named feature-1..feature-N, exactly like Example D. RESERVE that feature word for the counted items ONLY: give every supporting or decorative part a DIFFERENT name (a frame around a window is "frame", a stand under a cup is "base", a surrounding arch is "arch") so exactly N parts carry the feature word and the count is exact. Emit these counted primitives EARLY — right after the main body and before any decorative detail — so a long reply can never truncate them away. (A counted 3D assembly — "three pistons", "boxes stacked" — still uses "solids" as above.)
 - For a named object ("a snowman", "a rocket", "a funnel on its side"), first decompose it into named parts (body, head, nozzle, fins, ...), pick the best primitive for each part. Parts ATTACH and OVERLAP — neighbouring parts' boxes share area or at least an edge (a snowman = three circles stacked and overlapping); never lay components out disjoint side-by-side — that is an exploded blueprint, not a sketch. Even a "simple"/"basic" object gets its 2-4 signature parts (a phone = body + screen + camera dot; a car = body + cabin + 2 wheels) — one lone rectangle is never a recognizable sketch. Orientation matters: "on its side"/"upside down" means emit the rotated silhouette's points/path directly.
 - context.reference_sketches: known-good geometry for concepts the utterance mentions, mined from real human drawings. When present, ADAPT the reference — reposition, rescale, recolor, combine with other parts — instead of inventing the concept from scratch. References are drawn full-canvas: shrink them when they are only one part of a larger scene.
 - Compose generously and use the RICH primitives — favor polygon/path/text over stacks of rectangles when they capture the shape better. Keep every coordinate inside 0..100 and the result visually coherent and centered.
@@ -160,6 +162,29 @@ Example J — "a 3D engine with three pistons" (TRUE 3D via solids — you only 
 Example K — "two spheres and a bigger sphere in the middle" (multi-object solids: ALL THREE spheres in one list, resting on the same ground y=0, the middle one genuinely bigger — 40 vs 26 diameter — and a clear gap between the boxes: x spans 0-26, 30-70, 74-100 never overlap):
 {"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"label":"three spheres","geometry":null,"patch":null,"solids":[{"shape":"sphere","x":0,"y":0,"z":20,"w":26,"d":26,"h":26,"color":"#e5e7eb","name":"sphere-left"},{"shape":"sphere","x":30,"y":0,"z":13,"w":40,"d":40,"h":40,"color":"#d1d5db","name":"sphere-middle"},{"shape":"sphere","x":74,"y":0,"z":20,"w":26,"d":26,"h":26,"color":"#e5e7eb","name":"sphere-right"}]}
 """
+
+
+# A spoken count directly before a noun ("four wheels", "5 thrusters"). "one" is
+# excluded on purpose — a single item is already simple and needs no suppression.
+_COUNT_NUMWORD = r"(?:two|three|four|five|six|seven|eight|nine|ten|\d+)"
+
+
+def _is_counted_feature(concept: str, text: str) -> bool:
+    """True when ``concept`` appears in ``text`` immediately preceded by a count
+    ("four wheels", "five thrusters") — an explicitly-counted SUB-FEATURE the
+    user wants replicated N times as a SIMPLE primitive.
+
+    Such a feature's reference sketch is a full-canvas multi-path drawing of ONE
+    of it; injecting it teaches the model to render every counted item with that
+    much detail (measured live: a 5-path "wheel" exemplar for "a car with four
+    wheels" produced 20+ "wheel"-named leaves — a count-inflating detail
+    explosion and a truncation risk). So references for counted sub-features are
+    suppressed while the main-subject reference is kept. Singular or plural.
+    """
+    base = re.escape(concept.strip().lower().rstrip("s"))
+    if not base:
+        return False
+    return re.search(rf"\b{_COUNT_NUMWORD}\s+{base}s?\b", text.lower()) is not None
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -1067,6 +1092,12 @@ class LLMClassifier:
             ref_pairs = references
         else:
             ref_pairs = [(name, spec) for name, _, spec in match(text, limit=2)]
+        # Drop the reference for any EXPLICITLY-COUNTED sub-feature ("four
+        # wheels") — its full-canvas multi-path exemplar teaches per-item detail
+        # that inflates the count and bloats the reply (see _is_counted_feature).
+        # The main-subject reference (uncounted) is kept. Applies to BOTH the
+        # semantic-retrieval and keyword-match sources.
+        ref_pairs = [(name, spec) for name, spec in ref_pairs if not _is_counted_feature(name, text)]
         reference_sketches = [
             {"name": name, "geometry": spec.model_dump(mode="json", exclude_defaults=True)}
             for name, spec in ref_pairs

@@ -329,6 +329,107 @@ def test_seg2_salvage_is_conservative() -> None:
     ) is None
 
 
+# --------------------------------------------------------------------------- #
+# Seg 3 (scene completeness — counted features): "a car with four wheels" scored
+# 0.5 because the reference-sketch retrieval injected a full-canvas 5-path
+# "wheel" exemplar (matched on the plural); the model faithfully rendered EACH of
+# the 4 wheels with that much detail, so flattening the nested sub-groups
+# produced ~20 "wheel"-named leaves — the scorer's substring count over-counted
+# to 0, and the 10k-char reply risked truncation. Two-part fix: (1) suppress the
+# reference sketch for any EXPLICITLY-COUNTED sub-feature (_is_counted_feature),
+# keeping only the main-subject reference; (2) a prompt line steering counted
+# features to ONE SIMPLE BARE primitive each, emitted EARLY. Lock the
+# deterministic facts: the counted-feature detector, the reference suppression,
+# and that early simple counted primitives score an exact count + survive
+# truncation whole.
+# --------------------------------------------------------------------------- #
+def _counted_scene(n: int, role: str = "window") -> list[dict[str, object]]:
+    """A body, then N simple named counted primitives, then decorative detail."""
+    parts: list[dict[str, object]] = [
+        {"kind": "rectangle", "name": "wall", "x": 50, "y": 55, "width": 60,
+         "height": 50, "corner_radius": 0, "stroke": "#1f2937", "parts": []},
+    ]
+    for i in range(n):
+        parts.append({"kind": "rectangle", "name": f"{role}-{i + 1}",
+                      "x": 25 + i * 15, "y": 50, "width": 8, "height": 8,
+                      "corner_radius": 0, "stroke": "#2563eb", "parts": []})
+    # A frame around a window is NOT named with the counted word (prompt rule),
+    # so it never inflates the count.
+    parts.append({"kind": "path", "name": "trim", "x": 50, "y": 80, "width": 40,
+                  "height": 6, "stroke": "#1f2937",
+                  "d": "M 30 80 L 40 78 C 50 76 60 76 70 80", "parts": []})
+    return parts
+
+
+def test_seg3_early_simple_counted_primitives_score_exact_count() -> None:
+    # Four simple bare primitives named window-1..window-4 -> count is EXACTLY 4
+    # (no nested-group name multiplication), so the scorer's count dimension is
+    # 1.0. This is the whole point of the "one simple primitive per counted item"
+    # steer — the drawing carries precisely N countable leaf parts.
+    from quorum.eval.adherence import Expectation, score
+
+    payload = _parse_and_repair(_group_payload(_counted_scene(4)))
+    assert payload is not None
+    assert _part_names(payload) == [
+        "wall", "window-1", "window-2", "window-3", "window-4", "trim",
+    ]
+    op = payload_to_op(payload, speaker_id="p", utterance_id="u",
+                       raw_text="a wall with four windows")
+    s = score(op.geometry, Expectation(counts={"window": 4}))
+    assert s.count == 1.0  # exactly N leaf parts carry the feature word
+
+
+def test_seg3_counted_primitives_before_detail_survive_truncation() -> None:
+    # Counted primitives are emitted EARLY (before decorative detail), so even a
+    # reply truncated inside the trailing decoration keeps all N of them — the
+    # count survives the token cap. Truncate inside the final "trim" path's data.
+    raw = _group_payload(_counted_scene(4))
+    payload = _parse_and_repair(raw[: raw.index("C 50 76")])
+    assert payload is not None
+    names = _part_names(payload)
+    assert names == ["wall", "window-1", "window-2", "window-3", "window-4"]
+    assert sum(1 for nm in names if nm and "window" in nm) == 4
+
+
+def test_seg3_is_counted_feature_detects_counts() -> None:
+    # The deterministic trigger for reference suppression: a concept preceded by
+    # a spoken count (>=2) or digits is a counted sub-feature; a lone "a/an"
+    # feature is not. Singular/plural both match; "one" is deliberately excluded.
+    from quorum.pipeline.llm import _is_counted_feature
+
+    assert _is_counted_feature("wheel", "a car with four wheels")
+    assert _is_counted_feature("wheels", "a car with four wheels")  # plural concept
+    assert _is_counted_feature("thruster", "a funnel with five thrusters")
+    assert _is_counted_feature("window", "a house with a door and two windows")
+    assert _is_counted_feature("eye", "a face with two eyes and a nose")
+    assert _is_counted_feature("window", "4 windows in a row")  # digits
+    # NOT counted: single features and unrelated concepts stay referenced.
+    assert not _is_counted_feature("handle", "a coffee cup with a handle")
+    assert not _is_counted_feature("scarf", "a snowman wearing a red scarf")
+    assert not _is_counted_feature("car", "a car with four wheels")  # the subject
+    assert not _is_counted_feature("wheel", "a single wheel")  # "one"-class, uncounted
+
+
+def test_seg3_counted_feature_reference_is_suppressed() -> None:
+    # The keyword-match branch injects a full-canvas "wheel" exemplar for "four
+    # wheels" (matched on the plural); that multi-path drawing is what taught the
+    # model per-item detail. _user_payload must drop it while keeping the
+    # main-subject "car" reference. Pure/keyless — match() reads local templates.
+    from quorum.domain.op import ClassifierContext
+    from quorum.pipeline.llm import LLMClassifier
+    from quorum.pipeline.templates import match
+
+    text = "a car with four wheels"
+    matched = {name for name, _, _ in match(text, limit=2)}
+    assert "wheel" in matched  # precondition: the harmful ref WOULD be injected
+
+    payload = json.loads(LLMClassifier._user_payload(text, ClassifierContext()))
+    refs = payload["context"]["reference_sketches"] or []
+    names = {r["name"] for r in refs}
+    assert "wheel" not in names  # counted sub-feature suppressed
+    assert "car" in names  # main subject kept
+
+
 def test_seg1_invalid_target_shape_word_degrades_to_none() -> None:
     # ShapeKind has no "sphere"; the advisory target_shape must not sink the op.
     raw = _solid_payload(

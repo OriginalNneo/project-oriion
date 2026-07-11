@@ -214,6 +214,38 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Refinement loop — Segment 3: scene completeness (counted-feature refs) — DONE
+  (2026-07-12, branch drawing-quality-d3; OPUS fixer subagent per user directive;
+  ruff + mypy strict, 699 tests, +4 keyless `test_seg3_*` guards).** Root cause of
+  "a car with four wheels" scoring 0.5 was OVER-count, not under-count: the
+  reference retrieval injected a full-canvas 5-path "wheel" exemplar
+  (keyword-matched on the plural), so the model drew each wheel as a detailed
+  nested sub-group and `_flatten_nested_groups` name-prefixed ~20 "wheel"-leaves →
+  count blew up.
+  - Fix (`pipeline/llm.py`, generalizes): NEW `_is_counted_feature(concept, text)`
+    (a concept preceded by a spoken/digit count ≥2); `_user_payload` now DROPS the
+    reference sketch for any explicitly-counted sub-feature (keeps the main-subject
+    ref) on BOTH the keyword `match` and semantic `references` paths; + a COUNTED
+    FEATURES prompt line (each counted feature = one simple bare primitive named
+    feature-1..N, emitted early). Injecting a full-canvas multi-path exemplar of
+    something wanted N times as a simple primitive is a real quality bug regardless
+    of scoring.
+  - **Verified INDEPENDENTLY (honest numbers — the subagent's self-reported
+    held-out 0.925 was a lucky-variance draw; my 5 back-to-back runs were STABLE):**
+    TUNING strict **0.924 → 0.944** (robot "antenna and two wheels" 0.75 → 1.00 —
+    the ref fix generalized); HELDOUT strict **0.85 → 0.869 (STABLE ×5)**. Both
+    sets up, all 3D + counted TUNING prompts stay 1.0, no regression. Accepted.
+  - **STOP GATE (held-out ≥ 0.90) STILL NOT met (0.869 stable).** Per-prompt, the
+    entire remaining gap is 3 prompts: car **0.75** and robot-head **0.50** are
+    CONFIRMED scorer substring artifacts (the model draws 4 wheels / 2 antennas
+    correctly; the count dim miscounts "wheel-well" and antenna tip+rod as extra) —
+    NOT honest model targets; and coffee-cup **0.44** (the swing prompt; cause
+    under diagnosis — if model-side it's an honest fix, if the frozen min_parts it
+    is not). Honest math: held-out tops out ~0.925 iff coffee-cup → 1.0, even with
+    the two artifacts. A meaningful 0.90 that clears the artifacts needs a principled
+    SCORER-V2 (count DISTINCT features, not substring leaves) — a separate,
+    baseline-resetting change, not a gate nudge.
+  - Files: `quorum/pipeline/llm.py`, `tests/test_refinement_regression.py`.
 - **Refinement loop — Segment 2: truncated-JSON salvage — DONE (2026-07-12,
   branch drawing-quality-d3; Fable-5 fixer subagent; ruff + mypy strict, 695
   tests, +8 keyless `test_seg2_*` guards).** Verbose scenes emit dense
