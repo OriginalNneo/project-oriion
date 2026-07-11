@@ -5,51 +5,145 @@
 > changes constantly. The agent updates it **after every completed segment** —
 > see `RULES.md`. Read this first at the start of any session.
 
-> **Last updated:** 2026-07-11 _(doc-maintenance refresh — no code changes since §14 on 2026-06-12; §1 numbers reconciled to the §14 reality)_  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → Groq LLM (**set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair). **§12 mind-map iteration, §13 part editing + in-chain 3D, AND §14 voice undo + viewport follow — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **393 tests**, tsc, vite build. Next: user's mind-map design reference (incoming) → canvas redesign; human browser confirm; then D3 (plan.md §11).
+> **Last updated:** 2026-07-11  ·  **Current phase:** Phase 1a — Voice MVP ✅ with the full drawing stack: rules (**named-geometry tier · part-scoped edits · deterministic extrusion · voice undo · compose-onto-existing**) → **template bank (345 mined + 8 exact isometric, named parts, ~0 ms hits)** → **embeddings tier (semantic few-shot refs + persistent near-duplicate CREATE cache, warmed at startup)** → LLM (gemini-2.5-flash-lite via OpenRouter; **set/add/remove PATCH contract**, scene extension, restyle, exact-relation snapping, clamp/salvage/retry repair, **sphere/hemisphere solids**, **opt-in critique→repair pass**). **§12–§15, D3 isometric projection, D4 part 1 adherence eval, detection-accuracy fixes, the embeddings tier + its follow-ups, AND the generation-quality upgrades (solids vocabulary + configurable part cap + stage-C critique-repair) — DONE, e2e ALL PASS.** Checks green: ruff, mypy, **630 backend tests**, fast path p95 sub-ms (unchanged). **§16 ORIION frontend redesign — DONE (2026-07-11): the whole UI restyled to the hand-drawn ORIION sketch language (galaxy backdrop, paper cards, mic pill, tap-and-hold reactions mapped to the rules preference vocabulary, entry screens) with zero protocol/store/backend change; tsc + vite build green, live-verified connected in a browser.** **D4 part 2 (two-tier model router) — DONE (2026-07-11): an optional escalation tier routes intricate/3D prompts to a stronger model while flat shapes stay fast; default OFF (single-tier, unchanged), 637 tests, fast path p95 0.13 ms.** **Undo fix + multi-sphere upgrade — DONE (2026-07-11): "go back to the previous iteration" now works — wider §14 vocabulary AND a focus-history fallback so undo walks back from ROOT creates (was a silent no-op); multi-sphere prompts now emit true sphere `solids` with correct relative sizes/placement (flat 'sphere' reference suppressed, MULTI-OBJECT prompt rule + Example K); escalation tier now also routes named-solid prompts. 677 tests, fast path p95 0.128 ms, e2e 20/20.** Next: still-pending human browser confirm of §15/§16 + merges to main (plan.md §11); streaming stage-C output (the remaining half of D4 part 2) still optional.
 
 ---
 
 ## 1. One-line status
-**Voice MVP + compositional iteration (§12) + part-level editing & in-chain
-3D conversion (§13) + voice undo/go-back & viewport follow (§14) shipped.**
-Every modify branches a new mind-map child;
-recolors/restyles/extrusions/part edits are deterministic where they can be
-("a hexagon" → "turn this hexagon pink" → "make this hexagon three
-dimensional" runs entirely rules-stage at 0 ms, ending in a cabinet-extruded
-prism in three pink shades); the LLM edits scenes via a compact set/add/
-remove PATCH against named parts ("add two eyes to this mouse" = 1.2 s,
-originals byte-identical) and the rules layer handles part-scoped follow-ups
-("make one eye bigger than the other" = 0 ms, only that eye grows). All
-checks green (ruff, mypy, **393 backend tests**, tsc, vite build); fast path
-p95 **0.128 ms**; `e2e_check.py` ALL PASS. Next: human browser confirm,
-then D3 — true 3D projection (plan.md §11).
+**Voice MVP through the full drawing stack + §16 ORIION frontend redesign +
+D4-part-2 two-tier router — all shipped on branch `drawing-quality-d3`.**
+Backend: rules (named geometry · part-scoped edits · deterministic extrusion ·
+voice undo with focus-history fallback · compose-onto-existing) → template bank
+(345 mined + 8 isometric, ~0 ms) → embeddings tier (semantic refs + persistent
+near-duplicate CREATE cache, warmed at startup) → LLM (gemini-2.5-flash-lite via
+OpenRouter; set/add/remove PATCH, scene extension, exact-relation snapping,
+clamp/salvage/retry repair, sphere/hemisphere solids, multi-object generation,
+opt-in critique→repair, optional escalation tier for intricate/3D). Every modify
+branches a new mind-map child; "a hexagon" → "turn it pink" → "make it 3D" runs
+entirely rules-stage at ~0 ms; "two spheres and a bigger sphere in the middle"
+emits true shaded 3D sphere solids with correct relative sizes; "go back to the
+previous iteration" walks focus back through history. Frontend: the ORIION
+hand-drawn sketch UI (galaxy backdrop, paper cards, mic pill with an
+audio-reactive waveform, tap-and-hold + ⊕-button reactions mapped to the rules
+preference vocabulary, entry screens), single-WS / pure-render / role-split.
+All gates green (ruff, mypy, **677 backend tests**, `scripts/e2e_check.py` 20/20,
+tsc + vite build); fast path p95 ~0.13 ms. Pending human-only: browser confirm of
+§15/§16 + the live waveform (real mic, Chrome/Safari/Edge), then merges to main.
 
 ## 2. Current focus
-**§13 Part-level editing & in-chain 3D conversion — DONE (2026-06-12), all
-segments (see §3):** N1 demonstrative references ✅ · N2 part addressing +
-part-scoped fast path + fallback inversion ✅ · N3 LLM patch contract +
-template part names ✅ · N4 deterministic cabinet extrusion ✅ · N5
-integration (e2e ALL PASS, live probes, two integration bugs caught & fixed:
-extrude winding flip, modifier double-fold) ✅. §12 (mind-map iteration,
-recolor, labels, named shapes, restyle, radial canvas) was DONE earlier the
-same day. **Awaiting the human browser pass** — the full confirm script is
-§4 item 0. Then back to plan.md §11 D3-D5.
+**Usability round — audio-reactive waveform + higher-fidelity UI + undo fix +
+multi-sphere generation — DONE (2026-07-11, branch drawing-quality-d3).** Latest
+completed work; full detail in §3 (top four entries). One-line each:
+- **Undo actually reverts** ("go back to the previous iteration" was stuck): the
+  bug was TWO-layered — wider §14 undo vocabulary AND, the real one, a
+  focus-history fallback so undo walks back from ROOT creates (every fresh "draw
+  X" is a parent-less root; the old parent-only walk returned `[]` → empty diff →
+  silent no-op). `engine/state.py` + `pipeline/classify.py`.
+- **Multi-object / multi-sphere generation** ("two spheres and a bigger sphere in
+  the middle"): now emits true sphere `solids` with correct relative sizes and
+  non-overlapping placement (flat 'sphere' reference sketch suppressed via new
+  `has_volumetric_intent`, MULTI-OBJECT prompt rule + worked Example K).
+  Live-verified render: three shaded spheres, middle ~1.54× bigger.
+- **D4 part 2 two-tier router** (default OFF): optional escalation tier
+  (`QUORUM_LLM_ESCALATION_BACKEND/_MODEL`) sends intricate/3D prompts to a stronger
+  model, flat shapes stay fast; picked once per utterance, threaded through every
+  call. `pipeline/llm.py` `_Tier`/`_pick_tier`.
+- **§16 ORIION frontend redesign** + **audio-reactive waveform** (`frontend/`):
+  the whole UI restyled to the hand-drawn ORIION sketch language; the mic
+  waveform now tracks real voice amplitude (`frontend/src/useMicWave.ts`).
+- Gates green: ruff + mypy(strict), **677 backend tests**, fast path p95
+  ~0.13 ms (unchanged — nothing added to the rules path), `scripts/e2e_check.py`
+  20/20, tsc + vite build. The 4 `test_integration_loop.py` TestClient tests
+  deadlock (pre-existing httpx/starlette double-websocket issue, reproduces on a
+  clean tree) — run with `--deselect tests/test_integration_loop.py`.
 
-**User browser verdict (2026-06-12 evening): "right now, it's really
-nice."** New feedback captured as §4 item -1 (voice undo / go-back,
-mind-map viewport UX — iterations land too far away, and a user-provided
-design reference to collect BEFORE any canvas redesign).
+**Prior — Generation-quality upgrades — sphere/hemisphere solids + configurable
+part cap + stage-C render→critique→repair — DONE (2026-07-11).** Full record in
+§3. `sphere`/`hemisphere` join box/cylinder/wedge in `domain/isometric.py`
+(`project_solids(..., max_parts=)`); `QUORUM_MAX_SCENE_PARTS` (default 60, hard
+ceiling 120); opt-in `QUORUM_LLM_CRITIQUE` render→critique→repair (default OFF,
+at most one extra call, repair wins only if strictly better).
 
-**§14 program — DONE (2026-06-12, this session), pending the human
-browser pass.** The three pinned questions were ASKED AND ANSWERED by the
-user: (1) the mind-map design reference is INCOMING — user will share it
-in their next message; the canvas redesign stays GATED on it; (2) "zoom
-back out" = **go back / undo**, not a literal view zoom; (3) on go-back
-the abandoned child **stays visible** (no prune, no fade). Design in
-plan.md §14. U1 UNDO op ✅ · U2 undo grammar ✅ · U3 viewport follow ✅ ·
-U4 integration (e2e ALL PASS) ✅. 393 tests, all checks green, fast path
-p95 0.128 ms. ⚠️ Groq: 70b AND scout both quota-dead today; every §14
-path is deterministic and ran without the LLM.
+**Prior — Embeddings follow-ups — startup index warming + persistent CREATE cache —
+DONE & live-verified (2026-06-14, branch drawing-quality-d3).** Closes the two
+non-blocking follow-ups left by the embeddings tier (c344d1e): the 345-template
+reference index now warms in a background lifespan task (instant startup, no
+~3-4 s first-utterance penalty; required making `index_references` idempotent +
+thread-safe so it can't double the index racing the lazy fallback), and the
+near-duplicate CREATE cache now persists to disk (`QUORUM_RETRIEVAL_CACHE_PATH`,
+model-keyed, never-raises load) so a restart keeps the room's drawings.
+Main-thread build → 3-lens adversarial review (8 findings fixed: a concurrent
+`.tmp` write race, a classify-return latency stall, three `load_cache`
+crash-on-tampered-file paths, and silent warm-task failures). 596 tests,
+ruff+mypy clean, fast path unchanged. Full record in §3 (top).
+
+**Prior — Detection-accuracy + speed enhancements — DONE & live-verified
+(2026-06-14, committed 63e917c).** User feedback: "it's doing
+nicely; enhance detection (new shapes sometimes focus the OLD shape; placement
+~20% accurate → want ~85%), speed, and UX (defer UX)." Fixed: (1) every CREATE
+now takes focus (was: only the first ever) — the "edits the old shape" bug; (2)
+deterministic directional placement snapping (above/below/left/right/beside) —
+was raw model guesswork; (3) compose target resolves definite-only so a new
+shape can't hijack an old node; (4) default model → `google/gemini-2.5-flash-lite`
+(~2 s AND strong on color/placement/3D — bake-off winner). All live-verified.
+570 tests, fast path p95 0.119 ms. Full record in §3 (top).
+
+**Next:** (a) still pending (human-only): **browser confirm of §15/§16 + the
+audio-reactive waveform** (needs a real mic in Chrome/Safari/Edge — not
+screenshot-able headless) **+ merges to main** (plan.md §11); (b) the escalation
+tier is wired but OFF and needs a working cloud key (`backend/.env` flags the
+Groq key as transcript-leaked → rotate first); (c) streaming stage-C output (so
+the canvas animates while a complex scene draws) — the remaining half of D4
+part 2 — still optional. Dev note: backend runs on **:8010** in dev (:8000 is
+taken by an unrelated service); frontend `VITE_BACKEND_PORT=8010 npm run dev`.
+
+**Prior — D4 part 1 — instruction-adherence eval + OpenRouter backend + cheap-tier
+benchmark — DONE (2026-06-13).** Pure no-vision scorer
+(`quorum/eval/adherence.py`) grades count/color/coherence/relations/solids3d; a
+runner (`scripts/eval_adherence.py`) with a keyless `--self-test` benchmarks
+models. Closed the owed D3 live probe. Benchmark + 5 adversarial-review fixes in
+§3.
+
+**Prior — D3 — deterministic isometric projection — DONE & eyeball-verified
+(2026-06-13).** Branch: drawing-quality-d3 (off ui-zoom-adaptive-canvas, so it
+carries §15). LLM emits axis-aligned 3D `solids`; pure `domain/isometric.py`
+projects them to a flat isometric GROUP (model proposes, code disposes). 482
+tests, ruff+mypy clean, latency p95 0.132 ms (no regression). Built by one
+Sonnet subagent (the projection module) + main-thread LLM/prompt wiring, then a
+3-lens adversarial-review workflow (2 HIGH + 3 MED real bugs fixed & pinned).
+Eyeball gate ✓ (cube/engine/wedge/cylinder/stack). Full details + the
+plan-divergence flag in §3 (top entry).
+
+**Still pending (human-only): browser confirm of §15** (the agent can't observe
+it). Servers were live :8000/:5173 on the §15 code. Then commit/merge §15 → main
+and D3 → main (disjoint files: §15 frontend, D3 backend — independent PRs).
+
+**Prior — §15 UI canvas (zoom/pan/adaptive + focus-follow) + compose-onto-
+existing — DONE (2026-06-13), committed (1b732ae), pending the human browser
+confirm above.** Built via a 5-phase workflow; 8 high/med review bugs fixed.
+tsc + vite build green (193 kB bundle).
+
+Key frontend changes: new `usePanZoom.ts` (pointer events, ctrl/pinch zoom,
+drag-pan, clamp 0.2–2.5×, Fit/recenter, ResizeObserver, StrictMode-safe);
+new `ZoomControls.tsx` (−/%/+/Fit/Recenter/Follow toggle); `IdeaTree.tsx`
+redesigned as `.idea-scroll > .idea-viewport(CSS transform) > .idea-canvas`;
+focus-follow pauses while gesturing; **radial layout bug fixed** (depth-
+compounding: `kidRadius = childDepth*R` made chains land at 0,R,3R,7R… — now
+uniform `kidRadius = R`, tightened from ~288 px to `max(cw,ch)+60`).
+`styles.css` full-bleed map (overflow:hidden + transform pan replaces grid
+overflow-clip that made large maps unreachable); transcript → collapsible
+`<details>` drawer; `ParticipantView.tsx` controls width-capped; `DisplayView.tsx`
+full-bleed stage.
+
+Key backend change: **compose-onto-existing** (new `domain/compose.py`,
+classifier branch 5b). "Draw a horse" then "draw a box above the horse" now
+composes the box onto the horse as a child iteration, not a standalone node.
+436 tests (was 393; +43), ruff+mypy clean, pytest 0.53 s, latency green.
+
+**Prior programs still current:**
+§14 UNDO op ✅ · undo grammar ✅ · viewport follow ✅ · e2e ALL PASS ✅.
+§13/§12 all segments DONE. Fast path p95 sub-ms. ⚠️ Groq 70b AND scout both
+quota-dead 2026-06-12; all deterministic paths run without the LLM.
 
 **Session 2026-07-11 — doc-maintenance only, no code change.** State
 re-confirmed against the repo (last code commit 2026-06-12, §14 U4). The §1
@@ -130,6 +224,429 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Audio-reactive waveform + higher-fidelity UI pass — DONE (2026-07-11, branch
+  drawing-quality-d3; tsc + vite build green, no new deps).** Frontend-only,
+  from a live complaint ("the mic is recording but the waveform is stagnant... it
+  doesn't move as the voice speaks").
+  - **Waveform now tracks real voice amplitude**: NEW self-contained
+    `frontend/src/useMicWave.ts` — a SECOND, independent mic consumer alongside
+    SpeechRecognition (`getUserMedia` → `AudioContext` → `AnalyserNode`
+    getByteTimeDomainData → RMS per rAF frame, spread across the bars with
+    attack-fast/release-slow smoothing for a VU-meter feel). Writes bar y1/y2
+    straight to the SVG line refs (no per-frame React renders, one reused
+    `Uint8Array` — mirrors usePanZoom's imperative discipline). Does NOT send
+    audio over the WS (drives pixels only — single-WS rule intact). Gated on
+    `listening`; cleanup cancels rAF + stops tracks + closes the AudioContext
+    (StrictMode-safe). Fallbacks never throw: getUserMedia denied / no
+    AudioContext → calm idle shimmer; paused → the design's dashed line. The old
+    hardcoded static `BARS` array is gone. **Not headless-verifiable** (no mic /
+    no SpeechRecognition in headless Firefox) — needs a real Chrome/Safari/Edge
+    tab; verified by build + code review, awaiting human confirm.
+  - **Higher-fidelity usability pass** (`styles.css` + `ParticipantView.tsx`,
+    `DisplayView.tsx`, `IdeaTree.tsx`, `MicPill.tsx`): discoverable **⊕ React**
+    button on the visual card (reactions were hidden behind tap-and-hold; the
+    hold gesture still works); labelled live/offline connection pill; bigger
+    captions + speaker attribution + auto-scroll; ≥44px touch targets; green
+    "listening" mic tint; richer mind-map empty state + brighter edges on the
+    dark canvas; larger across-the-room type on the Display view.
+  - Contracts preserved: single-WS / pure-render / role-split; all behavioral CSS
+    contracts (`.idea-scroll` touch-action, `.idea-viewport` transform-origin,
+    `.idea-edges` pointer-events, `prefers-reduced-motion`, 640px breakpoint);
+    fonts stay self-hosted; no new npm deps.
+- **Undo fix ("go back to the previous iteration") + multi-sphere generation
+  upgrade — DONE (2026-07-11, branch drawing-quality-d3; ruff + mypy strict
+  clean, 677 backend tests (+40: 28 undo, 12 multi-solids), fast path p95
+  0.128 ms unchanged, e2e 20/20 ALL PASS).** Both from live user complaints.
+  - **Undo root cause was TWO-layered.** (a) Classify: `_UNDO_RE` knew
+    "previous one/version/situation/step/state" but NOT "iteration"/"last"/
+    "prior" or verb-less "back to the last one" — those fell to NOOP 0.2 and
+    the LLM misrouted them. (b) Engine (the REAL "still on the same
+    iteration" bug): `_undo()` only walked `parent_ids[0]`, but every CREATE
+    is a ROOT — so after any fresh "draw X", undo was a silent no-op (empty
+    diff, no broadcast). The §14 decision log had deferred focus-history undo
+    "until live use demands it"; live use demanded it.
+  - **Classify fix (`pipeline/classify.py`)**: nav-noun vocabulary widened
+    (previous|last|prior × one|version|situation|step|state|iteration[s],
+    plus "back to the (previous|last|prior)"); word-boundary content guards
+    kept ("the back of the house"/"going backwards" still never fire). Two
+    NEW guards: a PRUNE verb suppresses the bare nav-noun form ("delete the
+    last one" ≠ undo), and the directed-go-back check now strips generic nav
+    words before label/shape resolution (a node labelled "star" can no longer
+    stem-hijack "go back to the previous state"). Directed "go back to the
+    <resolvable label>" now emits FOCUS on that node directly (it used to
+    fall through and CREATE a duplicate hexagon); with modifiers attached it
+    still falls through to the MODIFY branches.
+  - **Engine fix (`engine/state.py`)**: NEW `_focus_history` stack. `_undo()`
+    is two-tier: parent chain first (unchanged, all §14 tests intact); at a
+    root, focus steps back to the newest live (unpruned) previously-focused
+    node. Stack maintenance is a pure function of each FOCUS_CHANGED event
+    (non-undo move pushes the previous focus; an undo move pops through its
+    target — no bounce-back loops), applied identically in `_set_focus` and
+    `from_events`, so REPLAY rebuilds the same stack (pinned by test: a
+    replayed engine chains a further undo exactly like the live one). Root
+    with no usable history stays a strict no-op (no event).
+  - **Multi-sphere diagnosis** (live probes, gemini-2.5-flash-lite): "two
+    spheres and a bigger sphere in the middle" came back as FLAT circles
+    (never `solids`), the "bigger" sphere was SMALLER (24 vs 30), one sphere
+    sat half off-canvas (center x=100), and 2/4 prompts misrouted to modify.
+    Root causes: the flat circle+equator 'sphere' TEMPLATE was being fed as a
+    reference sketch (teaching flat circles); zero multi-object counting/
+    relative-size/non-overlap guidance; no worked multi-sphere example.
+  - **Fix (`pipeline/llm.py` + `pipeline/intent.py`)**: NEW
+    `has_volumetric_intent` (= `has_3d_intent` OR spheres?/hemispheres?/orbs?
+    — deliberately NOT widening the rules-stage 3D signal, which would make
+    "add a sphere to it" extrude the focus). Used for (a) reference-sketch
+    suppression and (b) `_pick_tier` escalation routing, so sphere prompts
+    can use the stronger-model lever (default still OFF/unchanged). Prompt:
+    the TRUE-3D clause now says a spoken sphere/hemisphere/orb is ALWAYS a
+    solid, never a flat circle; NEW MULTI-OBJECT rule (count all N objects in
+    ONE create — never a modify; "bigger" ≥ 1.5×, "small" ≤ 0.6×, no size
+    word = identical sizes; distinct objects never overlap, everything fully
+    on canvas); NEW Example K (three sphere solids, middle 40 vs 26, gapped
+    x-spans 0-26/30-70/74-100). After: 4/4 probe prompts emit sphere solids
+    (projected, shaded, depth-sorted), sizes and CREATE routing correct —
+    eyeballed via rendered SVG. Escalation probe (qwen3-235b-a22b-2507):
+    same structure at 5–11 s vs 1.5–2 s — post-fix the fast tier already
+    matches it here, so escalation remains a pure quality lever for harder
+    assemblies.
+  - Tests: `test_undo.py` +28 (widened vocabulary + prune/nav-collision
+    guards, directed-FOCUS emit, root-undo history walk incl. multi-root
+    chains, bounce-back, pruned-entry skip, replay-parity, the exact
+    live-complaint phrase end-to-end), NEW `test_multi_solids.py` (12:
+    intent gates, reference suppression, tier routing, prompt clauses,
+    Example K projects with a genuinely bigger middle sphere + gapped world
+    boxes). Watch live: "make the last one bigger" fires UNDO (same
+    pre-existing quirk class as "the previous version had a window").
+- **D4 part 2 — two-tier model router — DONE (2026-07-11, branch
+  drawing-quality-d3; ruff + mypy strict clean, 637 backend tests (+7), fast
+  path p95 0.13 ms unchanged, e2e 20/20).** Backend-only, stage-C only,
+  default OFF. Adds an optional escalation tier: a stronger model that serves
+  ONLY intricate/3D utterances (the `has_3d_intent` gate — same signal the
+  rules stage uses to force stage-C escalation), while flat shapes stay on the
+  fast tier. "An engine with pistons"/"isometric cube" → escalation model;
+  "a red circle" → fast model.
+  - NEW settings `QUORUM_LLM_ESCALATION_BACKEND` (Backend|None, default None =
+    disabled → single-tier, byte-identical to today) + `QUORUM_LLM_ESCALATION_MODEL`
+    (`config/settings.py`); reuses the groq/openrouter key via new
+    `Settings.require_key_for(backend)`.
+  - `pipeline/llm.py`: immutable `_Tier(backend, model, api_key)` dataclass;
+    `__init__` builds `_fast_tier` (always) + optional `_escalation_tier`;
+    `_pick_tier(text)` chooses by `has_3d_intent`. The tier is picked ONCE per
+    utterance in `classify()` and threaded through `_complete`/`_send`/
+    `_corrective_retry`/`_critique_and_repair` (all gained a `*, tier` kwarg),
+    so every call an utterance makes (initial + corrective + critique) uses one
+    consistent tier — no per-request mutable state on the shared classifier.
+  - `_send` now reads `tier.backend/model/api_key` instead of `self._*`; the
+    fast tier holds the original values, so the single-tier path is unchanged.
+  - NEW `tests/test_llm_escalation.py` (7): routing (no-escalation→fast even for
+    3D; escalation→3D routes strong, flat stays fast; corrective retry keeps the
+    tier), `from_settings` wiring + key resolution. Synced the `_send`/`_complete`
+    test doubles in `test_llm_critique.py` + `test_d1_validation.py` +
+    `test_llm_geometry.py` to the new `tier` kwarg.
+  - **Not built (deferred, optional): streaming stage-C output** so the canvas
+    animates while a complex scene draws — a WS-protocol + engine-writer change
+    (plan.md §11 D4 part 2's second half); the router half (the higher-leverage,
+    lower-risk piece) is what shipped. To turn the router on: set
+    `QUORUM_LLM_ESCALATION_BACKEND` + `_MODEL` (needs the matching cloud key).
+- **§16 ORIION frontend redesign — DONE (2026-07-11, branch drawing-quality-d3;
+  tsc + vite build green, 204 kB / 66 kB gz).** The §15-gated "canvas redesign
+  awaiting a design reference" (plan.md §15/§16): the ORIION wireframe is that
+  reference. Frontend-only, zero protocol/store/backend change — RULES.md §4
+  contract preserved (one codebase role-switched, single WS, render = pure fn of
+  broadcast state, no localStorage session truth [only a cosmetic name prefill,
+  flagged], transcript+correction always visible; pan/zoom behavioral rules
+  carried over verbatim).
+  - **Design system**: `styles.css` rewritten to the ORIION sketch language —
+    galaxy `#0c0d12` star-field backdrop, white paper cards with wobbly 2px ink
+    borders (irregular `border-radius`), self-hosted Architects Daughter woff2
+    (`public/fonts/`, OFL, no external requests → LAN/offline safe; preload in
+    `index.html`), status-colour reaction chips (green/yellow/red/blue only).
+  - **New entry screens** (`EntryScreens.tsx` + `App.tsx` session state above the
+    socket effect): participant name+room-key join, display room picker;
+    `history.replaceState` keeps the URL the shareable session truth; socket
+    effect stays fully re-runnable (StrictMode-safe, no "ran once" guard).
+  - **Participant view** (`ParticipantView.tsx`): ORIION phone layout — Current
+    Generated Visual card (focused node's rough.js sketch; tap→mind map,
+    hold→reactions), Live Captions card (the merged "what the system heard"
+    surface + interim ghost row + text/undo), collapsible manual shapes, and the
+    always-visible mic pill. New `MicPill.tsx` (tap=toggle VoiceInput,
+    380 ms hold=react) and `ReactionMenu.tsx`.
+  - **Reactions map to the rules preference vocabulary** as plain utterances over
+    the existing WS (no backend change): Matches→"i like the current one" (+0.7),
+    Partly→"maybe the current one" (+0.3), Wrong→"not the current one" (−0.6, two
+    cross the −0.8 auto-prune floor by design), Ready→"let's go with this" (+1.0),
+    Alternative→prefills "how about " (a `_BRANCH_HINTS` phrase), Unclear/notes→
+    plain utterance. All visible in the shared transcript (transparency).
+  - **Mind map / display restyle**: sketch cards with CURRENT/Pruned status chips
+    + ✓/✕ affirmation tally chips (layout/pan-zoom math untouched); DisplayView
+    gets the ORIION header, a pipeline stepper while active, and an idle
+    alignment strip (idea count + top affirmation tallies). SketchNode text now
+    in the sketch font.
+  - **`vite.config.ts`**: proxy target now honours `VITE_BACKEND_PORT` (default
+    8000) so dev can point at a non-default backend port.
+  - Live-verified: backend booted, participant view connected over the WS (join→
+    welcome handshake, green dot) and rendered the full ORIION shell in a real
+    browser; utterances drive state through the loop (e2e_check 20/20).
+- **Embeddings follow-ups: startup index warming + persistent CREATE cache —
+  DONE & live-verified (2026-06-14, branch drawing-quality-d3; 596 tests
+  (+7 over the 589 baseline; +17 over 579), ruff+mypy clean (40 files), fast
+  path unchanged).** Closes the two non-blocking follow-ups the embeddings tier
+  (c344d1e) left open. Implemented on the main thread (tightly coupled in
+  `retrieval.py` + a thread-safety judgment call), then a 3-lens adversarial
+  review workflow (concurrency / persistence-integrity / latency-regression) on
+  Sonnet → 8 confirmed findings fixed + regression-pinned.
+  - **Startup index warming (`app.py`):** the 345-template semantic reference
+    index now warms in a BACKGROUND task in the lifespan (no-op unless
+    retrieval=local), so startup stays instant (healthz serves immediately) but
+    the index is ready before the first utterance — kills the old ~3-4 s
+    first-utterance penalty. The lazy fallback in `llm.py::_retrieve` stays as a
+    safety net.
+  - **The race fix that MAKES warming safe (`retrieval.py`):** `index_references`
+    was append-only and only set `_indexed=True` at the end, so a background warm
+    racing the lazy fallback would have DOUBLED every reference. Now idempotent +
+    thread-safe under a `threading.Lock` (first caller builds; all others — even
+    concurrent — no-op).
+  - **Persistent near-duplicate CREATE cache (`retrieval.py` + `settings.py`):**
+    the cache (utterance vectors + `GeometrySpec`s) now persists to
+    `retrieval_cache_path` (new setting; `QUORUM_RETRIEVAL_CACHE_PATH=.quorum_cache/
+    retrieval_cache.json` in `.env`, gitignored) so a restart keeps drawings the
+    room already produced. Keyed by embedding `model_id` + a format version; a
+    foreign-model/stale/corrupt/ragged file degrades to an EMPTY cache, never
+    crashes startup (`load_cache` "never raises" contract). Restored once per
+    process via the `get_retrieval` singleton; default path None = byte-identical
+    to the old in-memory-only behavior.
+  - **Review fixes (all real, pinned by tests):** (MED ×2) concurrent
+    `remember()` across rooms shared one `.tmp` path → older snapshot could win /
+    torn write → newest CREATE lost on restart — fixed with an `asyncio.Lock`
+    serializing writes in creation order (snapshot taken synchronously on the
+    loop, so mutation order = task order = write order → newest lands last);
+    (MED) the `await` on the disk write delayed `classify()` return — now
+    FIRE-AND-FORGET via a tracked background task (`flush()` added for tests +
+    graceful shutdown); (MED ×2 + LOW) `load_cache` could raise
+    AttributeError/TypeError/IndexError on tampered/non-dict/ragged JSON →
+    isinstance guard + explicit 2-D shape check + broadened except; (LOW ×2) the
+    warm task's exception only surfaced via asyncio's GC warning → wrapped in
+    try/except logging through the structured logger.
+  - **Live-verified with the real MiniLM embedder:** concurrent remembers both
+    persist (lock holds), simulated restart reloads both + exact-utterance reuse
+    hits, foreign-model + corrupt-`null` files both degrade to 0 cleanly.
+    Confirmed NO hidden model/network dependency added to CI (integration tests
+    use `TestClient(app)` without the `with` context, so lifespan never fires).
+- **Embeddings tier (the "vector DB"): semantic references + near-duplicate
+  cache — DONE & live-verified (2026-06-14, branch drawing-quality-d3, committed
+  c344d1e; 579 tests, ruff+mypy clean, fast path unchanged).** The user's idea;
+  realizes the cascade's long-planned stage B. `pipeline/embeddings.py` (Embedder
+  Protocol + lazy LocalEmbedder, sentence-transformers) + `pipeline/retrieval.py`
+  (numpy-cosine `_Index` + `SemanticRetrieval` + a PROCESS-WIDE `get_retrieval`
+  singleton so all rooms share one model + index, not N copies). Wired into the
+  LLM stage's `classify`.
+  - **Semantic references:** embed the utterance → inject the nearest known-good
+    drawings (template bank + remembered CREATEs) as LLM few-shot refs. Live:
+    "a frosty figure" → [snowflake, ice cream] (keyword match returns nothing).
+    Safe in every context — only changes which examples the model sees.
+  - **Near-duplicate cache:** remember each CREATE (utterance→geometry); a
+    create-like near-duplicate (cosine ≥ 0.94, no modify/extend markers via
+    `is_create_like`) reuses the stored geometry and SKIPS the LLM. Live: 2nd
+    "a medieval castle" → stage=cache 0.01 s vs 48 s. Reuse is always a CREATE so
+    it is NON-DESTRUCTIVE (the cache safety floor); modifies/composes
+    (target_node_id set) are never cached.
+  - **Gated:** `QUORUM_RETRIEVAL_BACKEND=mock` (default) = OFF, no heavy dep
+    needed; `local` = sentence-transformers (the `embeddings` extra). 9 unit
+    tests use a deterministic STUB embedder (no torch in CI). Enabled in .env now.
+  - Follow-ups (noted, non-blocking): first novel utterance per process warms the
+    345-template index (~3-4 s one-time — could warm at startup); the cache is
+    in-memory (lost on restart — persist later); references quality is bounded by
+    the template corpus ("frosty figure" found snowflake, not a snowman — corpus
+    gap, fine).
+- **Detection-accuracy fixes + fast/accurate model — DONE & live-verified
+  (2026-06-14, branch drawing-quality-d3; 570 tests, ruff+mypy clean, fast path
+  p95 0.119 ms; committed 63e917c).** Two live user-reported bugs, root-caused by
+  a read-only investigation subagent, fixed and reproduced live:
+  - **FOCUS BUG — "a new shape keeps editing the OLD shape."** `engine._create`
+    only moved focus to a new node when the canvas was EMPTY (`first = _focus_id
+    is None`), so every create after the first left focus on the prior node and
+    follow-ups ("make it bigger") hit it. Now EVERY create takes focus + demotes
+    the previous to ACTIVE (mirrors `_modify`; the demotion is an in-memory status
+    mutation, replay re-derives statuses from the final focus). Live:
+    circle→square→triangle each take focus. Regression-pinned incl. replay.
+  - **PLACEMENT ~20% → deterministic.** above/below/left/right/beside were NEVER
+    snapped — only inside/tangent were — so spatial placement was raw model
+    guesswork. New `relations._snap_all_directional` translates the newly-added
+    part(s) to the stated side of the host (shared `_partition_new` helper with
+    the inside snap; same "model proposes, code disposes" pattern). Live: "a box
+    above the horse" → box centre-y 21 vs horse 57 (ABOVE). Pinned (above +
+    beside). "on top of" is intentionally left to the compose on_top (overlap)
+    path, not directional snap.
+  - **Compose target hardened (#3):** classify.py branch 5b now resolves the
+    compose TARGET with `definite_only=True`, so an indefinite shape mention
+    ("a line above the horse") can't stem-match and hijack a fresh create into a
+    MODIFY of an existing "line" node.
+  - **Default model → `google/gemini-2.5-flash-lite`** (adherence bake-off
+    2026-06-14): ~2 s/call AND strong on color (blue car 1.0, yellow star 1.0),
+    placement (blue circle inside red square 1.0) and 3D — vs the cheapest 'ling'
+    (5-70 s, color 0.70, relations None/0). `gpt-5-nano` unusable (reasoning
+    model: 65 s, null content → BAD). Set in settings.py default AND .env.
+  - UX/UI polish bugs explicitly DEFERRED by the user ("down the road"); a vector
+    DB (semantic retrieval + result cache) proposed as the next speed/consistency
+    enhancement (§4).
+- **D4 (part 1) — instruction-adherence eval + OpenRouter backend + cheap-tier
+  benchmark — DONE (2026-06-13, branch drawing-quality-d3; 568 tests (+87:
+  85 adherence, 2 openrouter), ruff+mypy clean (38 files), fast path p95
+  0.129 ms unchanged).** Delivers the "measured adherence table" half of
+  plan.md §11 D4; the escalation-tier + streamed-fast-tier half is the next
+  segment (§4). Also closes the owed D3 live probe.
+  - **`quorum/eval/adherence.py`** (NEW, pure, no vision model): scores how well
+    a result GeometrySpec ADHERES to an utterance across `count` (role-name
+    substring match), `color` (hue match via `domain/color.py` HSL — chromatic
+    vs achromatic branches; the near-black default stroke deliberately does NOT
+    count as "blue"), `coherence` (union-find bbox connectivity = anti
+    exploded-view), `relations` (inside/above/below/beside bbox predicates,
+    skip-if-unresolved), `solids3d` (the `solids` payload path OR a multi-band
+    shaded-fill signature). `overall` = mean of the APPLICABLE dims; invalid → 0.
+    Same "model proposes, code disposes" split: the model draws, the code
+    measures.
+  - **`scripts/eval_adherence.py`** (NEW): 11-prompt annotated set + multi-model
+    runner; **keyless `--self-test` (8/8 PASS)** scores fixtures so the harness
+    is verifiable WITHOUT a key.
+  - **OpenRouter wired as an OpenAI-compatible backend** (`Backend.OPENROUTER` +
+    settings + unified `_send` sharing the Groq code path; OpenRouter-only
+    `HTTP-Referer`/`X-Title` headers). Opt-in `record_diagnostics` on
+    `LLMClassifier` (default OFF → server writes no shared state) records each
+    payload's kind (solids/patch/geometry/none) for the harness. Groq free tier
+    was 429-dead; **OpenRouter (user's key, paid, $10 credit) is now the active
+    backend** (`QUORUM_LLM_BACKEND=openrouter`, model `inclusionai/ling-2.6-flash`).
+  - **D3 live probe (owed) — DONE & eyeball-verified:** "a 3D engine with three
+    pistons" via the cheapest model (ling-2.6-flash) → stage=llm, `solids` path
+    → a coherent isometric assembly (shaded block + 3 depth-sorted pistons,
+    rendered PNG eyeballed). The model EMITS `solids` and the projection lands —
+    closes the D3 debt (previously only the deterministic projection was verified).
+  - **Cheap-tier adherence benchmark** (3 models, 7 s pacing to dodge per-model
+    429s; OpenRouter passes upstream throttles through):
+    | model | valid | solids | overall* | count | color | coher | rel | solids3d | p50/p95 s |
+    |---|---|---|---|---|---|---|---|---|---|
+    | inclusionai/ling-2.6-flash (cheapest) | 11/11 | 3/3 | 0.90 | 0.90 | 0.70 | 0.97 | — | 1.0 | 5.8/29.7 |
+    | meta-llama/llama-3.1-8b-instruct | 11/11 | 2/3 | 0.91 | 1.0 | 0.80 | 0.0 | 1.0 | 10.8/41.7 |
+    | qwen/qwen3-235b-a22b-2507 | 10/11† | 3/3 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 14.8/71.8 |
+    *overall = mean over VALID rows (conditional on a drawing being produced).
+    †qwen's one BAD row was a **429-exhausted NOOP, not a quality fail**
+    (rate-limit-corrupted — same caveat as the 2026-06-11 Groq incident).
+    **Findings:** all 3 reliably use the `solids` path (solids3d 1.0 — D3
+    corroborated at the model level); **color-following is the cheap tier's weak
+    spot** (ling 0.70); relations are the hardest dimension. **Every cheap
+    OpenRouter route is 30–72 s p95 — escalation-tier latency, NOT the ≤2 s fast
+    tier** (latencies include 429-retry waits but per-call is still seconds). So
+    the benchmark INFORMS but does NOT promote a production default, and a
+    rate-limit NOOP is never read as a quality signal (decisions log).
+  - **Adversarial harness review (workflow, 3 lenses → verify): 5 real findings
+    fixed + pinned by regression tests** — (MED) `count` over-counts on
+    projected solids (face-decomposition multiplies role names: "piston-1" →
+    "piston-1-body"+"piston-1-top") → skip count on the `solids` path; (MED) a
+    full-canvas background rect bridged everything in `coherence` → exclude
+    near-full-canvas parts (≥85 in both dims) as connectors; (MED) `overall`
+    averaged NOOP zeros while dim columns didn't → condition `overall` on valid
+    rows (validity column carries coverage); (LOW) `solids3d` false-positive on
+    a white-bg+dark pair → exclude near-white (L>0.92) fills from the shading
+    signature; (LOW) annotation gaps → added handle/scarf/hat counts. The review
+    also independently CONFIRMED a self-caught bug fixed pre-review:
+    `NAMED_COLORS` black/white must be truly achromatic (s=0) or they read as a
+    dark blue / are unmatchable.
+- **D3 — deterministic isometric projection — DONE & eyeball-verified
+  (2026-06-13, branch drawing-quality-d3; ruff+mypy clean, 482 tests
+  (+46: 35 isometric, 11 d3_solids), latency p95 0.132 ms unchanged).**
+  The LLM now reasons only about axis-aligned 3D PLACEMENT; the code does the
+  exact 30° projection — the relations.py/extrude.py "model proposes, code
+  disposes" pattern applied to volumetric 3D. "a 3D engine with pistons" now
+  renders as a coherent isometric assembly (was an exploded flat layout).
+  - **DESIGN DIVERGENCE from plan.md §11 D3 (flagged per CLAUDE.md §7, does
+    NOT change the queue):** plan said "the *renderer* does the projection".
+    Built instead as a pure DOMAIN transform that projects solids to a flat
+    GROUP of polygon/ellipse/path parts — because the codebase already
+    establishes that pattern (extrude.py, make_isometric.py) and both renderers
+    + the engine/replay/wire-contract already handle GROUPs. Net: **zero
+    renderer changes, zero client TS changes**, projection written ONCE in
+    Python. The plan's spirit (deterministic, pure, cached, LLM does no
+    projection math) is fully honored; only the layer differs.
+  - **`backend/quorum/domain/isometric.py`** (NEW, pure, Sonnet subagent):
+    `Solid(shape,x,y,z,w,d,h,color,name)` dataclass + `project_solids(Sequence[
+    Solid]) -> GeometrySpec|None`. Box/wedge → faces enumerated as 3D polygons,
+    culled by `outward_normal · (1,1,1) > 0`, projected (`sx=(x-z)cos30`,
+    `sy=(x+z)sin30-y`; world y is UP), shaded by normal orientation (L=0.80 top
+    / 0.55 front / 0.40 side / 0.22 stroke, sat floor 0.18, gray default
+    #9ca3af), z-sorted globally by world-centroid·(1,1,1) ascending (far first).
+    Cylinder → body PATH (sides + bottom half-ellipse) + top ELLIPSE.
+    Everything centered+scaled into [8,92] (fit ported from make_isometric).
+  - **`backend/quorum/pipeline/llm.py`**: `_SolidSpec` model + `_LLMPayload.
+    solids` (transient — projected in `payload_to_op` before the op leaves the
+    stage, so engine/replay/renderers see only the flat GROUP); solids clamp in
+    `_parse_and_repair`; prompt gains a "TRUE 3D — PREFER solids" rule + schema
+    line + worked **Example J** (3D engine = block box + 3 piston cylinders);
+    Example E re-marked as the hand-drawn FALLBACK (was contradicting the new
+    rule for "a 3D cube").
+  - **3-lens adversarial review (workflow, 3 Sonnet agents) found 9 issues; the
+    real ones fixed + pinned by regression tests:** (HIGH) `snap_relations`
+    must be SKIPPED for projected solids — its `inside`/`within` snap was
+    yanking a cylinder cap into the body (`from_solids` guard); (HIGH) the
+    60-part cap truncation kept the FARTHEST faces — now drops whole far CHUNKS
+    so the NEAREST survive and cylinder body/top pairs never split; (MED)
+    cylinder screen radii were missing a √2 factor (29% too narrow) — projected
+    circle x-semi-axis is r·√2·cos30; (MED) modify+solids now pins
+    target_node_id to focus (mirrors the patch branch); (MED) deleted dead
+    `_scale_path_str`; (LOW) log when geometry+solids both sent. Skipped (out of
+    scope, documented): shared cylinder z-key only mis-orders partial-
+    interpenetration arrangements we don't support.
+  - **Eyeball gate (`scripts/render_d3.py` → SVG+PNG via qlmanage):** cube
+    (3 shaded faces), engine (pistons on block, depth-sorted), wedge (ramp),
+    cylinder (foreshortened top), 3-box stack (cross-solid z-sort) — all ✓,
+    re-verified after the √2 cylinder fix.
+  - No classifier change needed: 3D intent already escalates to the LLM (D1),
+    which now has the `solids` tool; named-shape extrude (N4-B) and the
+    isometric template bank still serve the rules/template paths.
+- **§15 — UI canvas zoom/pan/adaptive + compose-onto-existing — DONE
+  (2026-06-13, branch ui-zoom-adaptive-canvas; tsc + vite build 193 kB,
+  436 tests, ruff+mypy clean, pytest 0.53 s).** 5-phase workflow: design
+  watchlist → 2 parallel implementers on disjoint files → build gate → 3
+  adversarial review lenses → fix-pass; 8 confirmed high/med bugs caught & fixed.
+  - **`frontend/src/usePanZoom.ts`** (new, zero deps): pointer events; ctrl/
+    meta-wheel + 2-pointer pinch zoom-about-cursor; plain-wheel pan; drag-pan;
+    clamp 0.2–2.5×; Fit/auto-fit/recenter; ResizeObserver; StrictMode-safe
+    cleanup + pointer-capture release; wheel listener `{passive:false}` so
+    `preventDefault` works (React `onWheel` is passive).
+  - **`frontend/src/ZoomControls.tsx`** (new): −/%/+/Fit/Recenter/Follow
+    toggle (`aria-pressed`); `stopPropagation` so control clicks never pan.
+  - **`frontend/src/IdeaTree.tsx`**: structure now `.idea-scroll >
+    .idea-viewport(CSS transform) > .idea-canvas`; focus-follow recenters the
+    focused card in transform space, PAUSES while gesturing, gated on the
+    Follow toggle; "sketching…" badge on the focused card when pipeline
+    status != idle. **FIXED radial-layout depth-compounding bug:**
+    `kidRadius = childDepth*R` made chains land at 0,R,3R,7R — now uniform
+    `kidRadius = R`, tightened from ~288 px to `max(cw,ch)+60`.
+  - **`frontend/src/styles.css`**: FIXED `.idea-scroll` `grid place-items:
+    center overflow-clip` bug that made large maps unreachable (now
+    `overflow:hidden` + transform pan; `.idea-canvas` drops `margin:auto`);
+    participant map is full-bleed; transcript → collapsible `<details>` drawer;
+    Display `.display-stage` full-bleed; `prefers-reduced-motion`;
+    `max-width:640px` responsive pass; zoom-controls / `.zc-btn` / `.sketch-badge` CSS.
+  - **`frontend/src/ParticipantView.tsx`**: controls inner block width-capped,
+    transcript drawer, Undo button (sends utterance text "undo").
+  - **`frontend/src/DisplayView.tsx`**: full-bleed stage.
+  - **`backend/quorum/domain/compose.py`** (new, pure):
+    `place_relative(target, new_part, relation)` → flat GROUP fit to the
+    0..100 box; relations above/below/left/right/on_top/behind/inside;
+    z-order (behind prepends, others append; on_top painted last); reuses
+    `relations.py` `part_bbox` + `_contain`; guards the 60-part limit. Minor
+    deferred: `_translate_part` clamps before fit-to-box so an added shape
+    can be slightly squished when the target hugs a canvas edge.
+  - **`backend/quorum/pipeline/classify.py`**: new branch 5b — "[create/draw/
+    add/put/place] a <shape> <spatial relation> the <existing node>" → compose-
+    MODIFY of the RESOLVED target node (conf 0.8, source=rules, modifiers=[]);
+    engine branches a child (§12-R1); falls back to focus when no explicit
+    target. Over-trigger guards: does NOT hijack plain create, multi-shape
+    create, or recolor; unresolved definite reference blocks the implicit-focus
+    fallback; `_detect_relation` maps "on top" (without "of") to `on_top` not
+    `above`; branch 5 yields to 5b when a mentioned shape resolves to an
+    existing definite node.
+  - New tests: `backend/tests/test_compose.py` and additions to
+    `backend/tests/test_classifier.py`.
 - **§14 U1+U2+U4 — voice undo/go-back — DONE, e2e ALL PASS (2026-06-12;
   U1/U2 by a Sonnet subagent, integrated + gated on the main thread).**
   393 tests (was 354; +39 in test_undo.py), ruff+mypy clean, fast path p95
@@ -789,35 +1306,43 @@ _(append-only-ish; newest at top)_
 - Agent operating instructions drafted → `CLAUDE.md`.
 
 ## 4. What's next (short queue)
--1. **Mind-map canvas redesign — GATED on the user's design reference
-   (user confirmed 2026-06-12 they'll share it in their next message).**
-   Do NOT invent a layout — design the next program (§15) around the
-   reference when it lands. The 2026-06-12-evening feedback that drove
-   §14 is otherwise RESOLVED: voice undo/go-back ✅ ("zoom back out" =
-   user-confirmed undo synonym), viewport follow ✅ (the focused card now
-   auto-centers; ring-spacing/zoom-to-fit questions fold into the
-   redesign).
-0. **Browser live-confirm of §12 + §13 + §14 (the one thing the agent
-   can't observe):** Participant tab, speak:
-   - "draw a cat" → "make the cat orange" → "shade it into a tabby"
-   - "draw a cuboid" → "I want the cube to be red"
-   - "a hexagon" → "turn this hexagon pink" → "make this hexagon
-     three-dimensional" (should be instant — no LLM)
-   - "a mouse" → "add two eyes to this mouse" → "make one eye bigger than
-     the other" (eyes ~1-2 s; the eye edit instant)
-   - **§14:** after the hexagon chain say "never mind, go back" twice
-     (focus walks back to the plain hexagon, pink/3D children stay
-     visible) then "make it blue" (a blue SIBLING branches). Confirm the
-     view auto-centers on the focused card at every step (the viewport
-     follow — the part only a human can judge).
-   Confirm each iteration extends OUTWARD as a new mind-map node, edits land
-   on the same shape, and the radial layout/animations feel right.
-   ⚠️ Server currently runs the scout model — but on 2026-06-12 BOTH 70b
-   and scout went quota-dead; the LLM steps (tabby, mouse eyes) need a
-   fresh quota window or a new key. Everything else is deterministic.
-1. **Resume point after that: Drawing Quality D3→D5** (D1/D2 done) — full
-   steps in §2, design intent in plan.md §11. D3 = deterministic isometric
-   projection (box/cylinder/wedge IR; renderer does the math).
+-1. **Human browser confirm of §15 (the one thing the agent can't observe).**
+   Servers live: backend :8000 (restarted with compose) and Vite :5173.
+   Branch: ui-zoom-adaptive-canvas (uncommitted — commit after confirm).
+   Check:
+   - Zoom out with ctrl-wheel (or pinch on mobile) — map zooms about the cursor.
+   - Pan by dragging — map pans, cards not clipped at edges.
+   - Press Fit — map fits all cards into view.
+   - Toggle Follow — enable it, say an utterance that creates a child: the
+     focused card should scroll into view; drag-pan while it's auto-following
+     and confirm follow pauses while gesturing.
+   - **Uniform tighter spacing** — a 4-hop chain should look compact, not exploding.
+   - **Compose:** restart backend if needed, say "draw a horse" then "draw a box
+     above the horse" — the box should land as a child of the horse node with
+     a compose-MODIFY, not a standalone new node.
+   Then commit and merge ui-zoom-adaptive-canvas → main.
+0. [x] **D3 — deterministic isometric projection — DONE (2026-06-13).** See §3
+   top entry. `domain/isometric.py` + LLM `solids` payload; eyeball-verified.
+1. [x] **D4 part 1 — adherence eval + cheap-model benchmark — DONE (2026-06-13).**
+   See §3 top. `quorum/eval/adherence.py` (pure scorer) + `scripts/eval_adherence.py`
+   (annotated set + keyless self-test) + OpenRouter backend; benchmark table +
+   findings + 5 review fixes recorded. **D3 live-probe also DONE** (ling-2.6-flash
+   emits `solids`; coherent isometric engine eyeballed).
+1b. [x] **Detection accuracy + speed — DONE & live-verified (2026-06-14).** See
+   §3 top + commit 63e917c. Focus-on-create fix, deterministic directional
+   placement snapping, definite-only compose target, and the gemini-2.5-flash-lite
+   model swap (~2 s). User goal "placement ~20%→85%, new shapes focus, faster" met.
+2. [x] **Vector DB (embeddings tier) — DONE & live-verified (2026-06-14).** See
+   §3 top + commit c344d1e. Semantic few-shot references + near-duplicate CREATE
+   cache; gated (`QUORUM_RETRIEVAL_BACKEND=local`, default off). Follow-ups noted
+   in §3 (warm index at startup; persist cache to disk).
+3. **D4 part 2 (now OPTIONAL, latency no longer the driver):** gemini-2.5-flash-lite
+   is ~2 s, so the escalation tier is only worth it for raw quality on hard
+   prompts (stream stage-C output; an even stronger model for 3D/intricate). Gate
+   any model change with `eval_adherence.py`. D5 (optional) = VLM-critique→repair.
+4. **UX/UI polish — DEFERRED by the user** ("a bit buggy… work on this down the
+   road"). Revisit after the vector DB.
+5. **Still pending (human-only): §15 browser confirm + merges to main.**
 2. [x] **Live-mic review** — DONE (see §3). Finding: needs richer geometry.
 3. [x] **Richer geometry — DONE via LLM stage C (tier B).** Stage turned ON
    (Groq) + prompt teaches polygon/path/text; verified live (see §3).
@@ -898,6 +1423,20 @@ _(why we chose what — so we don't relitigate it)_
 | 2026-06-12 | Undo guard: "go back to the <X>" where X resolves to a label/shape falls through to FOCUS resolution; parent-chain undo over focus-history undo | "go back to the cat" is a directed focus move, not an undo. Parent-chain semantics need zero new replayed state; focus-history undo (handles cross-root hops) deferred until live use demands it |
 | 2026-06-12 | e2e harness: a LIVE-but-quota-dead LLM = loud SKIP of the LLM-scene step (15 s timeout-tolerant), never a hang | A 429-dead LLM falls back to NOOP → no diff is broadcast → the script hung at the rocket step and the LLM-FREE steps after it never ran. Mock-skip already existed; quota-dead is a distinct environment state. Assertions unchanged when a diff arrives |
 | 2026-06-12 | Viewport follow scrolls to the focused card's LAYOUT coords, not its rendered box | Cards animate left/top over 0.45 s — `scrollIntoView` would chase a mid-transition position; the layout map already holds the final coordinates |
+| 2026-06-13 | Radial mind-map uses a **UNIFORM ring step** (`kidRadius = R`, one card + ~60px gap); never compound radius with depth | `childDepth*R` made each successive iteration hop's edge longer than the last (0,R,3R,7R) — "line across too big" (user report). Uniform step + zoom/fit handles density. |
+| 2026-06-13 | Canvas pan/zoom is **hand-rolled (zero deps)** and is LOCAL VIEW state (RULES.md §4 — not authoritative session state); imperative pointer/wheel listeners with `{passive:false}` | React's synthetic `onWheel` is passive so `preventDefault` can't be called on it; a local transform is not session state and must not flow through the engine. No external pan/zoom library — avoids bundle bloat and dependency lock-in. |
+| 2026-06-13 | **Compose-onto-existing** = DETERMINISTIC placement (code proposes AND disposes), conf-0.8 rules fast path, modifiers=[] pre-baked, targets the RESOLVED named node (not just focus); over-trigger guards keep plain/multi-shape create intact | Quota-resilient (Groq often 429-dead) and "a box above the horse" must extend the horse, not spawn a standalone node. Deterministic `place_relative` matches the model-proposes-code-disposes pattern used throughout. |
+| 2026-06-13 | **D3 true-3D = project to a flat GROUP in the DOMAIN, not in the renderer** (plan.md §11 D3 said "renderer does it"). LLM emits transient `solids` (box/cylinder/wedge, x,y,z,w,d,h); `domain/isometric.project_solids` does the 30° projection→shading→cull→z-sort→fit, producing polygon/ellipse/path parts | Both renderers + engine/replay/wire already handle GROUPs (the extrude.py / make_isometric.py precedent), so a domain transform = ZERO renderer/client changes and the projection written ONCE. Plan's spirit (deterministic, pure, cached, LLM does no math) fully honored; only the layer differs. Flagged per CLAUDE.md §7 — does NOT reorder the queue |
+| 2026-06-13 | **Projected 3D bypasses `snap_relations`** (`from_solids` flag in `payload_to_op`) | A 3D utterance with "inside/within/in it" made `_snap_all_inside` treat the cylinder's top-cap (the last part) as "newly added" and yank it into the body — silent corruption. The projection is already exact; relation-snapping is for LLM-placed parts, not code-projected ones (adversarial-review HIGH find) |
+| 2026-06-13 | **Isometric circle projects with a √2 factor**: screen semi-axes = r·√2·cos30 and r·√2·sin30 | The projected horizontal circle's extrema are at cos t ∓ sin t = ±√2; dropping √2 (first cut did) made every cylinder 29% too narrow. Math, not taste — the same "code does the arithmetic" principle as tangency/extrusion (adversarial-review MED find, pinned by test) |
+| 2026-06-13 | **OpenRouter is an OpenAI-compatible LLM backend** (`Backend.OPENROUTER`), a config swap not a rewrite; it is the ACTIVE backend (Groq free tier 429-dead). User directive "use the cheapest model" → default `inclusionai/ling-2.6-flash` | Same 12-factor seam as Groq/Ollama (RULES.md §5): one `_send` path, per-backend URL + optional OpenRouter headers. A paid key with $10 credit removes the Groq quota fragility that broke §13/§14 live probes |
+| 2026-06-13 | **Instruction-adherence is scored by a pure, deterministic, no-VLM scorer** (`quorum/eval/adherence.py`): count/color (HSL hue)/coherence (union-find)/relations (bbox)/solids3d (shading signature OR `solids` path); `overall` = mean of APPLICABLE dims; a keyless `--self-test` gates the harness itself | "Model proposes, code disposes" applied to evaluation: the model draws, the code measures. No vision model keeps it fast, free, deterministic and CI-able. The harness — not the model — is the thing we must trust, so it is adversarially reviewed and unit-tested (85 tests) before any number is believed |
+| 2026-06-13 | **Adherence scoring guards (from the adversarial review):** coherence EXCLUDES near-full-canvas background parts (they'd bridge an exploded foreground); count SKIPS the `solids` path (projection face-decomposition multiplies role names); `overall` is conditioned on VALID rows (dim columns already are); near-white fills don't count as shaded 3D faces | A benchmark is only as trustworthy as its metric. Each guard closes a way a model could score high without adhering (or low despite adhering). Pinned by regression tests so the gaming vector can't silently return |
+| 2026-06-13 | **Do NOT swap the production default on this benchmark.** Cheap OpenRouter routes measured 30–72 s p95 (escalation-tier latency, not the ≤2 s fast tier); qwen3-235b "won" on adherence (1.0) but had a 429-exhausted NOOP row and the slowest latency | Reinforces the 2026-06-11 Groq-quota lesson: rate-limit-corrupted rows are not quality signals, and a benchmark we ran on slow/throttled routes can't promote a live default. The benchmark INFORMS the D4-part-2 escalation tier; it does not auto-promote |
+| 2026-06-14 | **Every CREATE takes focus** (was: only the first node ever, `first = _focus_id is None`); the previous focus steps back to ACTIVE | Live bug: a new shape kept editing the OLD shape because focus never moved off the first node, so follow-ups ("make it bigger") hit the stale node. Mirrors `_modify`'s focus move; demotion is in-memory and replay re-derives statuses from the final focus (no new event needed). The latest contribution is what you want to iterate on |
+| 2026-06-14 | **Directional placement is snapped deterministically** (`relations._snap_all_directional`: above/below/left/right/beside translate the new part to the stated side of the host with a small gap); "on top of" stays the compose on_top (overlap) path | Placement was ~20% accurate because only inside/tangent were snapped — every directional relation was raw LLM guesswork. Same "model proposes, code disposes" as inside/tangent: the direction is the meaning, the exact coords are incidental. Shares `_partition_new` (new vs old part identification) with the inside snap |
+| 2026-06-14 | **Default model swapped to `google/gemini-2.5-flash-lite`** on a CLEAN bake-off (0 429s, complete data): ~2 s/call AND strong on color/placement/3D | NOT a contradiction of the 2026-06-13 "don't swap on a corrupted benchmark" rule — that barred swapping on slow, rate-limited, NOOP-corrupted rows. This bake-off was clean and the model is both fast and accurate, fixing the latency AND the color/relations weakness at once. `gpt-5-nano` rejected (reasoning model: 65 s, returns null content). `eval_adherence.py` remains the gate for any future swap |
+| 2026-06-14 | **Embeddings tier is gated + a process-wide singleton.** Default `QUORUM_RETRIEVAL_BACKEND=mock` (off, keyword refs, no torch); `local` enables semantic refs + the near-duplicate cache. `get_retrieval` is lru_cached so all rooms share ONE embedder+index | `build_classifier` runs per room — a per-instance embedder would load the model + re-embed 345 templates N times (memory + latency blowup). Gating keeps CI/basic checkouts torch-free. The result cache reuses CREATEs ONLY (non-destructive) on cosine ≥ 0.94 + no modify markers, so a near-duplicate can't corrupt a context-dependent edit |
 
 ## 6. Open questions
 - Preference-signal strength taxonomy ("maybe" vs "let's go with"). _Mostly
@@ -927,11 +1466,11 @@ corpus incl. colors/prune/modify-named — browser does STT client-side in 1a)._
 |---|---|---|---|
 | Endpointing + STT (browser) | <1.5 s | — (client-side) | Web Speech API; not server-measurable — judge at live-mic review |
 | STT (server, 1b) | <1 s | — | Phase 1b (faster-whisper) |
-| Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks + §14 undo branch 0 |
-| Classify (LLM) | <1.5 s local / <0.8 s Groq | scene create ~1.0/1.8 s; **scene-edit PATCH ~1.2–1.5 s live** (scout); full restyle re-emission ~3.5–5.5 s | ON. Patch edits (add/set/remove parts) are ~3x faster than full re-emission — most §13 edits are patches; many follow-ups (recolor, part size, extrusion) never reach the LLM at all |
+| Classify (fast) | <0.2 s | **0.04 ms / 0.07 ms** | rules stage incl. scenes/colors + §12 label resolution & named shapes + §13 part resolution & extrusion checks + §14 undo branch 0 + §15 compose branch 5b (~0 ms) |
+| Classify (LLM) | <1.5 s local / <0.8 s Groq | **ACTIVE: `google/gemini-2.5-flash-lite` via OpenRouter ≈ 1.6–2.7 s/call** (bake-off 2026-06-14; one 8.6 s outlier). Prior cheap 'ling' was 5.8–14.8 s p50 / 30–72 s p95 (incl. 429 waits) — replaced | ON. gemini-2.5-flash-lite picked for fast AND accurate (color/placement/3D). gpt-5-nano rejected (reasoning model: 65 s, null content). Patch edits ~3x faster than full re-emission; most follow-ups (recolor/size/extrude/compose/undo) never reach the LLM |
 | Render | <0.5 s | **~0.00 ms / 0.01 ms** | deterministic + LRU-cached (cache hits sub-µs) |
 | Engine apply | (internal) | **0.05 ms / 0.06 ms** | DAG mutation + event append; modify creates + renders a child node (§12); §14 undo = focus move only |
-| **End-to-end (server fast path)** | **<5 s** | **0.090 ms / 0.128 ms** | classify+engine+render. §14 re-measure: p95 0.178→0.128 ms (undo's branch-0 is one regex; run-to-run variance dominates); ~39,000x under budget |
+| **End-to-end (server fast path)** | **<5 s** | **0.10 ms / 0.13 ms** (2026-07-11) | classify+engine+render. D3 AND D4 add NOTHING to the fast path — D4 is offline eval tooling (`quorum/eval`, `scripts/eval_adherence.py`) plus a default-OFF `record_diagnostics` hook on the LLM stage; the `solids` projection still lives in the LLM stage. The 2026-07-11 generation-quality segment (sphere/hemisphere, max_scene_parts, default-OFF critique-repair) also lives entirely in the LLM stage — p50/p95 0.093/0.129 → 0.10/0.13 ms is run-to-run variance; ~38,000x under budget |
 
 > Read-back: the server-side fast path stays ~4 orders of magnitude under the
 > 5 s budget. The real human-perceived latency now has two contributors: the

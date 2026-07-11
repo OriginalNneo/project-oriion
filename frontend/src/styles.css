@@ -1,15 +1,42 @@
+/* ============================================================
+   ORIION design system — hand-drawn sketch UI on a galaxy backdrop.
+   §16 canvas redesign (design reference: the ORIION wireframe).
+   Behavioral contracts preserved verbatim from the §15 pan/zoom work:
+   .idea-scroll / .idea-viewport / .idea-edges / .zoom-controls rules,
+   the prefers-reduced-motion block, and the 640px breakpoint.
+   ============================================================ */
+
+@font-face {
+  font-family: "Architects Daughter";
+  src: url("/fonts/architects-daughter.woff2") format("woff2");
+  font-display: swap;
+}
+
 :root {
-  --bg: #0b1020;
-  --panel: #141a2e;
-  --panel-2: #1b2238;
-  --ink: #e6eaf2;
-  --muted: #8b93a7;
-  --accent: #2563eb;
-  --accent-2: #38bdf8;
-  --ok: #34d399;
-  --off: #f87171;
-  --card: #f8fafc;
-  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* ink + paper */
+  --ink: #111;
+  --ink-2: #444;
+  --ink-3: #7c7c84;
+  --panel: #fff;
+  --line: #111;
+  --bg: #0c0d12;
+  --chrome-ink: #e9e9f2;
+  --chrome-muted: #9b9dac;
+
+  /* reaction status colours — the ONLY colour in the system */
+  --c-green: #1f8a3b;
+  --c-yellow: #c9920a;
+  --c-red: #cc2b2b;
+  --c-blue: #1f6fd6;
+
+  /* sketch radii (irregular on purpose — hand-drawn look) */
+  --skr-lg: 255px 13px 225px 15px/15px 225px 13px 255px;
+  --skr-md: 200px 12px 180px 14px/14px 180px 12px 200px;
+  --skr-sm: 140px 9px 150px 8px/8px 150px 9px 140px;
+  --skr-pill: 200px 18px 200px 18px/18px 200px 18px 200px;
+
+  --wf-font: "Architects Daughter", "Comic Sans MS", cursive;
+  font-family: var(--wf-font);
 }
 
 * {
@@ -21,8 +48,32 @@ body,
 #root {
   margin: 0;
   height: 100%;
-  background: var(--bg);
-  color: var(--ink);
+  color: var(--chrome-ink);
+}
+
+/* Galaxy backdrop (self-contained star-field data URIs). */
+body {
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(circle at 18% 22%, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 9%),
+    radial-gradient(circle at 80% 60%, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 8%),
+    radial-gradient(circle at 52% 88%, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 7%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260' viewBox='0 0 260 260'%3E%3Cg fill='%23ffffff'%3E%3Ccircle cx='34' cy='28' r='.9' opacity='.8'/%3E%3Ccircle cx='120' cy='52' r='.7' opacity='.55'/%3E%3Ccircle cx='210' cy='36' r='1' opacity='.85'/%3E%3Ccircle cx='250' cy='120' r='.7' opacity='.5'/%3E%3Ccircle cx='176' cy='150' r='.8' opacity='.7'/%3E%3Ccircle cx='96' cy='128' r='.6' opacity='.45'/%3E%3Ccircle cx='44' cy='168' r='.9' opacity='.75'/%3E%3Ccircle cx='150' cy='214' r='.7' opacity='.55'/%3E%3Ccircle cx='232' cy='226' r='.85' opacity='.7'/%3E%3Ccircle cx='18' cy='230' r='.7' opacity='.5'/%3E%3Ccircle cx='70' cy='86' r='.55' opacity='.4'/%3E%3Ccircle cx='198' cy='96' r='.6' opacity='.5'/%3E%3C/g%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400' viewBox='0 0 400 400'%3E%3Cg fill='%23ffffff'%3E%3Ccircle cx='60' cy='70' r='.7' opacity='.5'/%3E%3Ccircle cx='320' cy='140' r='.8' opacity='.55'/%3E%3Ccircle cx='220' cy='300' r='.6' opacity='.4'/%3E%3Ccircle cx='380' cy='360' r='.7' opacity='.45'/%3E%3Ccircle cx='30' cy='340' r='.7' opacity='.45'/%3E%3Ccircle cx='150' cy='180' r='.55' opacity='.35'/%3E%3C/g%3E%3C/svg%3E");
+  background-repeat: no-repeat, no-repeat, no-repeat, repeat, repeat;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------- text helpers ---------------- */
+.tiny {
+  font-size: 0.76rem;
+}
+.muted {
+  color: var(--chrome-muted);
+}
+.on-paper .muted,
+.sk .muted {
+  color: var(--ink-3);
 }
 
 .loading,
@@ -30,71 +81,444 @@ body,
   display: grid;
   place-content: center;
   height: 100%;
-  color: var(--muted);
+  color: var(--chrome-muted);
   text-align: center;
 }
+.empty .empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 34px;
+  border: 2px dashed rgba(255, 255, 255, 0.14);
+  border-radius: var(--skr-lg);
+  background: rgba(255, 255, 255, 0.02);
+  max-width: 360px;
+}
+.empty .empty-mark {
+  opacity: 0.8;
+  margin-bottom: 2px;
+}
+.empty .empty-title {
+  font-size: 1.25rem;
+  color: var(--chrome-ink);
+  margin: 0;
+}
 .empty .hint {
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  color: var(--chrome-muted);
+  margin: 0;
+  line-height: 1.4;
 }
 
+/* ---------------- connection dot ---------------- */
 .dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
   display: inline-block;
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  flex: 0 0 auto;
 }
 .dot.on {
-  background: var(--ok);
+  background: var(--c-green);
+  box-shadow: 0 0 0 3px rgba(31, 138, 59, 0.22);
 }
 .dot.off {
-  background: var(--off);
+  background: var(--c-red);
+  box-shadow: 0 0 0 3px rgba(204, 43, 43, 0.2);
 }
 
-/* ---------------- Participant ---------------- */
-.participant {
+/* connection status pill (dot + word) — glanceable "is it live?" */
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  letter-spacing: 0.02em;
+  color: var(--chrome-muted);
+  white-space: nowrap;
+}
+.conn.on {
+  color: #7fd39a;
+}
+.conn.off {
+  color: #e79191;
+}
+
+/* live activity indicator (listening… / sketching…) with a soft pulsing pip */
+.status-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.status-pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-yellow);
+  animation: sketch-pulse 1.3s ease-in-out infinite;
+}
+
+/* ---------------- sketch primitives ---------------- */
+.sk {
+  border: 2px solid var(--line);
+  background: var(--panel);
+  border-radius: var(--skr-md);
+  color: var(--ink);
+}
+.sk.lg {
+  border-radius: var(--skr-lg);
+}
+.sk.sm {
+  border-radius: var(--skr-sm);
+}
+.sk.pill {
+  border-radius: var(--skr-pill);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: 2px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: var(--skr-pill);
+  padding: 10px 14px;
+  font-size: 0.92rem;
+  transition:
+    transform 0.08s,
+    background 0.12s;
+}
+button:hover {
+  background: #f1f1f1;
+}
+button:active {
+  transform: translateY(1px) scale(0.99);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+button.ghost {
+  background: transparent;
+  border: 2px dashed var(--ink-3);
+  color: var(--ink-3);
+}
+button.sm {
+  padding: 6px 11px;
+  font-size: 0.82rem;
+}
+
+/* chrome buttons sit on the dark backdrop */
+button.chrome {
+  background: #171922;
+  border: 1.5px solid #3a3c47;
+  color: #c4c5d2;
+  border-radius: 120px 10px 120px 10px/10px 120px 10px 120px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+}
+button.chrome:hover {
+  background: #1d2030;
+  border-color: #6a6c7a;
+  color: #fff;
+}
+
+input[type="text"],
+input:not([type]) {
+  font-family: inherit;
+}
+.app-in {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: #fff;
+  color: var(--ink);
+}
+.app-in::placeholder {
+  color: var(--ink-3);
+}
+
+/* ---------------- entry screens ---------------- */
+.form-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: 26px 22px;
+  text-align: center;
+  gap: 5px;
+}
+.brand-xl {
+  font-size: 2.1rem;
+  font-weight: bold;
+  letter-spacing: 1px;
+  color: #f5f5f8;
+}
+.brand-sub {
+  font-size: 1.05rem;
+  color: var(--chrome-ink);
+}
+.brand-note {
+  font-size: 0.85rem;
+  color: var(--chrome-muted);
+  margin: 8px 0 6px;
+}
+.form-card {
+  width: 100%;
+  max-width: 420px;
+  text-align: left;
+  padding: 20px;
+  margin-top: 10px;
+}
+.form-card .lab-field {
+  font-size: 0.88rem;
+  margin: 8px 0 5px;
+}
+.form-card .app-in.keyish {
+  text-align: center;
+  font-size: 1.3rem;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+}
+.form-err {
+  color: var(--c-red);
+  font-size: 0.8rem;
+  margin-top: 8px;
+}
+.foot-note {
+  font-size: 0.78rem;
+  color: var(--chrome-muted);
+  margin-top: 12px;
+  max-width: 420px;
+}
+button.wide {
+  width: 100%;
+}
+
+/* ---------------- participant shell ---------------- */
+.p-shell {
   display: flex;
   flex-direction: column;
   height: 100%;
-  max-width: 680px;
+  max-width: 560px;
   margin: 0 auto;
+  position: relative; /* reaction menu + scrim anchor here */
+  overflow: hidden;
 }
-.bar {
+.p-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px 12px;
   padding: 12px 16px;
-  background: var(--panel);
-  border-bottom: 1px solid #222a44;
+  flex-wrap: wrap;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
-.brand {
+.p-head .brand {
   font-weight: 700;
-  letter-spacing: 0.02em;
+  font-size: 1.05rem;
+  letter-spacing: 0.06em;
+  color: #f3f3f6;
 }
-.brand.big {
-  font-size: 1.6rem;
+.p-head .room {
+  color: var(--chrome-muted);
+  font-size: 0.82rem;
 }
-.bar .me {
-  color: var(--muted);
-  font-size: 0.85rem;
+.p-head .me {
+  color: var(--chrome-muted);
+  font-size: 0.82rem;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.bar .status {
+.p-head .status {
   margin-left: auto;
-  color: var(--accent-2);
-  font-size: 0.85rem;
-  text-transform: capitalize;
+  color: var(--c-yellow);
+  font-size: 0.82rem;
+  min-height: 1em;
+}
+.p-head .leave {
+  padding: 6px 12px;
 }
 
-.controls {
-  padding: 14px 16px;
-  background: var(--panel);
-  border-bottom: 1px solid #222a44;
+/* the "Current Generated Visual" card */
+.visual-card {
+  margin: 4px 12px 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
 }
-.controls .row {
-  margin-bottom: 10px;
+.card-ttl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.card-ttl-row .card-ttl {
+  flex: 1;
+  text-align: left;
+  margin-bottom: 0;
+}
+.visual-card .card-ttl {
+  font-size: 0.95rem;
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 6px;
+}
+/* discoverable reaction affordance — replaces the hidden tap-and-hold as the
+   PRIMARY path; the hold gesture still works for power users. */
+.react-btn {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  min-height: 36px;
+  font-size: 0.8rem;
+  font-weight: bold;
+  border: 2px solid var(--line);
+  border-radius: 120px 10px 120px 10px/10px 120px 10px 120px;
+  background: #fff;
+}
+.react-btn:hover {
+  background: #eef4ff;
+  border-color: var(--c-blue);
+  color: var(--c-blue);
+}
+.react-btn:disabled {
+  opacity: 0.4;
+}
+.visual-card .visual-body {
+  height: 208px;
+  border: 1.5px dashed #c4c4c4;
+  border-radius: var(--skr-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    linear-gradient(#fff, #fff) padding-box,
+    repeating-linear-gradient(45deg, #fafafa, #fafafa 10px, #f4f4f4 10px, #f4f4f4 20px);
+}
+.visual-card .visual-empty {
+  color: var(--ink-3);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 0 18px;
+}
+.visual-card .visual-cap {
+  text-align: center;
+  margin-top: 7px;
+  font-size: 0.85rem;
+}
+.visual-card .visual-hint {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+.visual-card .chips {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 5px;
+  flex-wrap: wrap;
+}
+
+/* live captions card (this IS the "what the system heard" surface) */
+.captions-card {
+  margin: 0 12px 8px;
+  padding: 10px 12px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.captions-card .card-ttl {
+  font-size: 0.9rem;
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 4px;
+}
+.cap-feed {
+  flex: 1;
+  min-height: 72px;
+  overflow-y: auto;
+  touch-action: pan-y; /* re-enable scroll within the feed on iOS */
+  padding-right: 4px;
+}
+.cap-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 5px 2px;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--ink-2);
+  border-bottom: 1px solid #f0f0f0;
+}
+.cap-row:last-child {
+  border-bottom: none;
+}
+.cap-row b {
+  color: var(--ink);
+  font-weight: bold;
+}
+.cap-row.ghost {
+  font-style: italic;
+  color: var(--ink-3);
+}
+.cap-row.err {
+  color: var(--c-red);
+}
+.cap-empty {
+  color: var(--ink-3);
+  font-size: 0.8rem;
+  text-align: center;
+  padding: 10px 0;
+}
+.say {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.say input {
+  flex: 1;
+  min-height: 44px;
+}
+.say button {
+  min-height: 44px;
+}
+.btn-undo {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+}
+
+/* manual shapes (collapsible fallback loop) */
+.manual {
+  margin-top: 8px;
+  color: var(--ink-3);
+}
+.manual summary {
+  cursor: pointer;
+  font-size: 0.76rem;
+  user-select: none;
+}
+.manual .row {
+  margin: 8px 0;
 }
 .toggle {
-  color: var(--muted);
-  font-size: 0.9rem;
+  color: var(--ink-2);
+  font-size: 0.82rem;
   display: inline-flex;
   gap: 6px;
   align-items: center;
@@ -102,7 +526,7 @@ body,
 .shape-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
+  gap: 8px;
 }
 .shape-cell {
   display: flex;
@@ -111,127 +535,278 @@ body,
 .shape-cell button {
   flex: 1;
 }
-button {
-  background: var(--accent);
-  color: white;
-  border: 0;
-  border-radius: 10px;
-  padding: 12px 10px;
-  font-size: 0.95rem;
-  cursor: pointer;
-}
-button:active {
-  transform: translateY(1px);
-}
-button.ghost {
-  background: transparent;
-  border: 1px solid #2c3658;
-  color: var(--muted);
+.shape-cell button.ghost {
   flex: 0 0 72px;
 }
-button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+
+/* map view header row */
+.map-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 12px 6px;
+  color: var(--chrome-ink);
 }
-.voice-row {
+.map-head .ttl {
+  font-weight: bold;
+}
+.map-head .spacer {
+  flex: 1;
+}
+
+/* mic dock — always visible at the bottom */
+.mic-dock {
+  padding: 8px 14px 14px;
+}
+
+/* ---------------- mic pill ---------------- */
+.mic {
   display: flex;
   align-items: center;
   gap: 12px;
+  border: 2px solid var(--line);
+  background: #ececec;
+  color: var(--ink);
+  border-radius: var(--skr-pill);
+  padding: 8px 16px 8px 8px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  width: 100%;
+  min-height: 62px;
+  transition:
+    background 0.2s,
+    box-shadow 0.2s;
+}
+.mic.listening {
+  background: #f3fbf5;
+  box-shadow: inset 0 0 0 1px rgba(31, 138, 59, 0.35);
+}
+.mic:disabled,
+.mic.unavailable {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.mic .knob {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: #fff;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+.mic.listening .knob {
+  background: #e7f6ec;
+  border-color: var(--c-green);
+}
+.mic.listening .knob svg {
+  stroke: var(--c-green);
+}
+.mic .knob svg {
+  width: 22px;
+  height: 22px;
+}
+.mic .body {
+  flex: 1 1 auto;
+  text-align: center;
+  line-height: 1.2;
+  min-width: 0;
+}
+.mic .body .lab {
+  font-size: 0.85rem;
+}
+.mic .wave {
+  display: block;
+  margin: 2px auto;
+}
+.mic .tag {
+  font-size: 0.72rem;
+  white-space: nowrap;
+  font-weight: bold;
+}
+.tag-green {
+  color: var(--c-green);
+}
+.tag-red {
+  color: var(--c-red);
+}
+.mic-hint {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--chrome-muted);
+  margin-top: 5px;
+}
+
+/* ---------------- reaction chips / tallies ---------------- */
+.rx {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1.5px solid var(--line);
+  border-radius: 120px 9px 120px 9px/9px 120px 9px 120px;
+  padding: 2px 8px 2px 3px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 0.8rem;
+}
+.rx .ic {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.7rem;
+  flex: 0 0 auto;
+}
+.ic-green {
+  background: var(--c-green);
+}
+.ic-yellow {
+  background: var(--c-yellow);
+}
+.ic-red {
+  background: var(--c-red);
+}
+.ic-blue {
+  background: var(--c-blue);
+}
+.ic-plain {
+  background: #666;
+}
+
+/* ---------------- reaction menu overlay ---------------- */
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 15;
+}
+.rx-menu {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #ededed;
+  border: 2px solid var(--line);
+  border-radius: var(--skr-lg);
+  color: var(--ink);
+  padding: 14px;
+  z-index: 20;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
+}
+.rx-menu .rh {
+  text-align: center;
+  font-size: 0.95rem;
+  margin-bottom: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rx-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px 8px;
   margin-bottom: 12px;
 }
-.mic {
-  flex: 0 0 auto;
-  min-width: 130px;
-}
-.mic.on {
-  background: #b91c1c;
-  animation: mic-pulse 1.6s ease-in-out infinite;
-}
-@keyframes mic-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.55);
-  }
-  50% {
-    box-shadow: 0 0 0 10px rgba(248, 113, 113, 0);
-  }
-}
-.interim {
-  color: var(--accent-2);
-  font-size: 0.9rem;
-  font-style: italic;
-  min-height: 1.2em;
-}
-.manual {
-  margin-top: 12px;
-  color: var(--muted);
-}
-.manual summary {
+.rx-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  text-align: center;
+  line-height: 1.15;
   cursor: pointer;
-  font-size: 0.85rem;
-  margin-bottom: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+  color: var(--ink);
 }
-.say {
+.rx-opt:hover {
+  background: none;
+}
+.rx-opt:disabled {
+  opacity: 0.4;
+}
+.rx-opt .big {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--line);
+  background: #fff;
+}
+.rx-opt .big .ic {
+  width: 24px;
+  height: 24px;
+  font-size: 0.85rem;
+}
+.rx-opt:active .big {
+  transform: scale(0.94);
+}
+.rx-bot {
   display: flex;
   gap: 8px;
 }
-.say input {
-  flex: 1;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid #2c3658;
-  background: var(--panel-2);
-  color: var(--ink);
+.rx-note-hint {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  margin-top: 9px;
 }
 
+/* ---------------- idea tree (behavioral contracts preserved) ---------------- */
 .tree-wrap {
   flex: 1;
-  overflow: auto;
-  padding: 12px;
-}
-.transcript {
-  background: var(--panel);
-  border-top: 1px solid #222a44;
-  padding: 8px 16px 14px;
-  max-height: 28%;
-  overflow: auto;
-}
-.transcript h4 {
-  margin: 6px 0;
-  color: var(--muted);
-  font-weight: 600;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.transcript ul {
-  margin: 0;
-  padding-left: 0;
-  list-style: none;
-  font-size: 0.9rem;
-}
-.transcript li {
-  padding: 2px 0;
-  color: var(--ink);
+  min-height: 0;
+  overflow: hidden;
 }
 
-/* ---------------- Idea tree ---------------- */
+/* Pan container — pointer events drive pan/zoom (usePanZoom). */
 .idea-scroll {
+  position: relative;
   width: 100%;
   height: 100%;
-  overflow: auto;
-  display: grid;
-  place-items: center;
+  overflow: hidden;
+  touch-action: none; /* pointer events drive pan/zoom; iOS re-enables within .cap-feed */
+  cursor: grab;
+  user-select: none;
 }
+.idea-scroll.grabbing {
+  cursor: grabbing;
+}
+
+/* Transform wrapper — the element whose CSS transform is animated for follow/fit. */
+.idea-viewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0; /* zoom math uses top-left origin */
+  will-change: transform;
+}
+.idea-viewport.animating {
+  transition: transform 0.4s ease-out;
+}
+
 .idea-canvas {
   position: relative;
-  margin: auto;
 }
 .idea-edges {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
+
 @keyframes card-enter {
   from {
     opacity: 0;
@@ -243,100 +818,306 @@ button:disabled {
   }
 }
 
+/* Sketch-style idea cards: white paper, wobbly 2px ink border. */
 .node-card {
   position: absolute;
-  background: var(--card);
-  border-radius: 16px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  background: var(--panel);
+  color: var(--ink);
+  border: 2px solid var(--line);
+  border-radius: var(--skr-md);
+  box-shadow: 6px 8px 0 rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* Animate position when the mind-map reflows on a new iteration. */
   transition:
     left 0.45s ease-out,
     top 0.45s ease-out,
     transform 0.35s,
-    box-shadow 0.35s,
-    outline-color 0.35s;
-  outline: 3px solid transparent;
-  /* Enter animation for newly mounted cards. */
+    box-shadow 0.35s;
   animation: card-enter 0.3s ease-out both;
 }
+/* Focus ring via box-shadow — outline renders as a rectangle around the
+   irregular radii on some browsers. */
 .node-card.focused {
-  outline-color: var(--accent);
   transform: scale(1.04);
-  box-shadow: 0 10px 30px rgba(37, 99, 235, 0.45);
+  box-shadow:
+    0 0 0 3px var(--bg),
+    0 0 0 6px #fff,
+    8px 10px 0 rgba(0, 0, 0, 0.4);
 }
 .node-card.pruned {
   opacity: 0.45;
   filter: grayscale(0.6);
+  border-style: dashed;
+}
+.node-card.sketching {
+  border-color: var(--c-blue);
 }
 .node-canvas {
   flex: 1;
-  padding: 10px;
+  padding: 8px;
   min-height: 0;
 }
 .node-meta {
   display: flex;
-  gap: 6px;
-  padding: 6px 10px 10px;
+  gap: 5px;
+  padding: 4px 8px 8px;
   flex-wrap: wrap;
+  align-items: center;
 }
-.chip {
-  font-size: 0.72rem;
-  background: #eef2ff;
-  color: #3949ab;
-  border-radius: 999px;
-  padding: 2px 8px;
-}
-.chip.score {
-  background: #fef3c7;
-  color: #92400e;
-}
-/* Node label chip — concept name stamped by the classifier ("cuboid", "cat"). */
 .node-title {
   font-size: 0.68rem;
   font-variant: small-caps;
   letter-spacing: 0.06em;
-  color: var(--muted);
+  color: var(--ink-2);
   text-align: center;
-  padding: 4px 10px 0;
+  padding: 4px 10px 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* muted separator below the chip, above the sketch */
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1.5px dashed #ccc;
 }
 
-/* ---------------- Display ---------------- */
+/* status label chips (mind-map vocabulary) */
+.mm-label {
+  font-size: 0.62rem;
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1.5px solid;
+  white-space: nowrap;
+  align-self: center;
+  margin-top: 5px;
+  background: #fff;
+}
+.lab-current {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: #ececec;
+}
+.lab-green {
+  color: #176c2e;
+  border-color: var(--c-green);
+  background: #e7f3ea;
+}
+.lab-red {
+  color: #9e2222;
+  border-color: var(--c-red);
+  background: #f6e8e8;
+}
+.lab-yellow {
+  color: #8a6500;
+  border-color: var(--c-yellow);
+  background: #f7f0dd;
+}
+.suggested-by {
+  font-size: 0.62rem;
+  color: var(--ink-3);
+}
+
+/* Sketch badge — pulsing status pip on the active focused card. */
+@keyframes sketch-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+.sketch-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 0.66rem;
+  background: #fff;
+  color: var(--ink);
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  animation: sketch-pulse 1.4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ---------------- zoom controls (screen-space HUD) ---------------- */
+.zoom-controls {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 5;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  background: #fff;
+  border: 2px solid var(--line);
+  border-radius: var(--skr-pill);
+  padding: 5px 8px;
+  box-shadow: 4px 5px 0 rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+}
+.zc-btn {
+  background: #fff;
+  color: var(--ink);
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.zc-btn:active {
+  transform: translateY(1px);
+}
+.zc-btn.active {
+  background: var(--ink);
+  color: #fff;
+}
+.zc-pct {
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  min-width: 38px;
+  text-align: center;
+}
+
+/* ---------------- display (big screen) ---------------- */
 .display {
   display: flex;
   flex-direction: column;
   height: 100%;
 }
-.display-bar {
+.d-head {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 32px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.d-head .brand-xl {
+  font-size: 1.9rem;
+}
+.d-head .d-tagline {
+  color: var(--chrome-muted);
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+.d-head .d-head-right {
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 18px 28px;
 }
-.display-bar .room {
-  color: var(--muted);
+.d-head .conn {
+  font-size: 0.95rem;
+}
+.d-head .room-pill {
+  padding: 4px 16px;
+  font-size: 1rem;
 }
 .display-stage {
   flex: 1;
-  overflow: auto;
-  display: grid;
-  place-items: center;
-  padding: 24px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
 }
-.display-foot {
-  padding: 16px 28px;
-  text-align: center;
-  color: var(--muted);
+.d-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px 32px 22px;
+  color: var(--chrome-muted);
+  font-size: 1.25rem;
+  flex-wrap: wrap;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.d-strip .focus-label {
+  color: var(--chrome-ink);
+}
+.d-strip .rx {
+  font-size: 1rem;
+  padding: 3px 12px 3px 4px;
+}
+
+/* pipeline stepper — the "what's happening now" line, readable across a room */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  font-size: 1.2rem;
+  color: var(--chrome-muted);
+}
+.stepper .st {
+  padding: 6px 16px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+}
+.stepper .st.active {
+  border-color: #fff;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  animation: sketch-pulse 1.4s ease-in-out infinite;
+}
+.stepper .sep {
+  color: #4a4c58;
   font-size: 1.1rem;
 }
-.display-foot .live {
-  color: var(--accent-2);
-  text-transform: capitalize;
+.stepper .who {
+  color: var(--c-yellow);
+  margin-right: 6px;
+  font-weight: bold;
+}
+
+/* ---------------- responsive: narrow phones ---------------- */
+@media (max-width: 640px) {
+  .p-shell {
+    max-width: 100%;
+  }
+  .visual-card .visual-body {
+    height: 168px;
+  }
+  .say {
+    flex-wrap: wrap;
+  }
+  .say input {
+    flex: 1 1 100%;
+  }
+  .say button {
+    flex: 1;
+    min-height: 42px;
+  }
+  .shape-grid {
+    grid-template-columns: 1fr;
+  }
+  .rx-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .zoom-controls {
+    right: 8px;
+    bottom: 8px;
+    padding: 4px 6px;
+    gap: 4px;
+  }
+  .zc-btn {
+    padding: 5px 7px;
+    font-size: 0.8rem;
+  }
+}
+
+/* ---------------- motion preferences ---------------- */
+/* Disable all animation and transition for users who prefer reduced motion.
+   Covers: card enter, position/transform transitions, viewport follow animation. */
+@media (prefers-reduced-motion: reduce) {
+  .node-card {
+    animation: none !important;
+    transition: none !important;
+  }
+  .idea-viewport {
+    transition: none !important;
+  }
+  .sketch-badge,
+  .stepper .st.active {
+    animation: none !important;
+  }
 }

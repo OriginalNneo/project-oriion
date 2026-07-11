@@ -395,11 +395,14 @@ def _apply_mods_to_part(part: GeometrySpec, modifiers: list[str]) -> GeometrySpe
 # apply_patch
 # ---------------------------------------------------------------------------
 
+# Default soft cap on parts-per-scene. Callers with access to Settings pass
+# `max_parts=settings.max_scene_parts` (env QUORUM_MAX_SCENE_PARTS) instead;
+# GeometrySpec's hard model ceiling is PARTS_HARD_MAX (domain/geometry.py).
 _MAX_PARTS = 60
 
 
 def apply_patch(
-    scene: GeometrySpec, patch: PartsPatch
+    scene: GeometrySpec, patch: PartsPatch, *, max_parts: int = _MAX_PARTS
 ) -> tuple[GeometrySpec, list[str]]:
     """Apply a PartsPatch (remove → set → add) to a scene, with validation.
 
@@ -416,7 +419,8 @@ def apply_patch(
       fails → drop clause, warn.
     - ``add`` name collision → auto-suffix -2/-3/… and warn.
     - ``add`` kind=group → drop, warn.
-    - Parts cap: 60.  Truncate adds beyond cap with a warning.
+    - Parts cap: ``max_parts`` (default 60).  Truncate adds beyond cap with a
+      warning.
     - If scene is a single (non-GROUP) shape and the patch adds parts: wrap it
       as a group first, with the original shape named from its label or "base".
     - Result must validate as a GeometrySpec.
@@ -518,9 +522,9 @@ def apply_patch(
             )
             continue
 
-        if len(working) >= _MAX_PARTS:
+        if len(working) >= max_parts:
             warnings.append(
-                f"add: parts cap ({_MAX_PARTS}) reached — "
+                f"add: parts cap ({max_parts}) reached — "
                 f"'{new_part.name}' and subsequent adds truncated."
             )
             break

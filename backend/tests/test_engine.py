@@ -42,6 +42,29 @@ def test_create_makes_node_and_autofocuses() -> None:
     assert eng.snapshot().focus_node_id == node.id
 
 
+def test_new_create_takes_focus_and_demotes_previous() -> None:
+    """A later CREATE steals focus so follow-ups hit the NEW shape, not the old
+    one (regression for the 'it keeps editing the old shape' bug). Replay-safe."""
+    eng = _engine()
+    a = eng.apply(_create(ShapeKind.RECTANGLE, "u1")).upserted[0].id
+    diff = eng.apply(_create(ShapeKind.CIRCLE, "u2"))
+    b = next(v for v in diff.upserted if v.geometry.kind == ShapeKind.CIRCLE).id
+    assert b != a
+    assert eng.focus_node_id == b  # the new shape is focused
+    snap = {n.id: n for n in eng.snapshot().nodes}
+    assert snap[b].status == NodeStatus.FOCUSED
+    assert snap[a].status == NodeStatus.ACTIVE  # old shape stepped back
+    # the demoted old focus rides in the same diff so clients update it
+    assert any(v.id == a and v.status == NodeStatus.ACTIVE for v in diff.upserted)
+    # replay lands on the same focus + statuses (demotion isn't an event; it is
+    # re-derived from the final focus, same as _modify)
+    replayed = DesignStateEngine.from_events("t", eng.events(), clock=FixedClock())
+    assert replayed.focus_node_id == b
+    rsnap = {n.id: n for n in replayed.snapshot().nodes}
+    assert rsnap[b].status == NodeStatus.FOCUSED
+    assert rsnap[a].status == NodeStatus.ACTIVE
+
+
 def test_branch_links_as_sibling_and_offsets() -> None:
     eng = _engine()
     parent_id = eng.apply(_create(ShapeKind.RECTANGLE)).upserted[0].id

@@ -109,10 +109,15 @@ def test_groups_stay_flat() -> None:
         GeometrySpec(kind=ShapeKind.GROUP, parts=[inner])
 
 
-def test_parts_capped_at_60() -> None:
-    parts = [GeometrySpec(kind=ShapeKind.CIRCLE) for _ in range(61)]
+def test_parts_hard_ceiling_at_120() -> None:
+    """The model's HARD ceiling is PARTS_HARD_MAX (120); the configurable soft
+    cap (Settings.max_scene_parts, default 60) is enforced by the code paths
+    that build parts (apply_patch, project_solids), not by the frozen model."""
+    ok = [GeometrySpec(kind=ShapeKind.CIRCLE) for _ in range(61)]
+    GeometrySpec(kind=ShapeKind.GROUP, parts=ok)  # 61..120 validates now
+    over = [GeometrySpec(kind=ShapeKind.CIRCLE) for _ in range(121)]
     with pytest.raises(ValidationError):
-        GeometrySpec(kind=ShapeKind.GROUP, parts=parts)
+        GeometrySpec(kind=ShapeKind.GROUP, parts=over)
 
 
 def test_v1_specs_still_validate_and_roundtrip() -> None:

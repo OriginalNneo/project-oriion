@@ -25,6 +25,14 @@ Validation repair pipeline ("model proposes, code disposes"):
      additional LLM call is made with the pydantic error appended as a corrective
      user message. The existing 429/5xx retry is orthogonal; total worst-case
      calls per utterance = 2 (rate-limit) x 2 (validation) = 4, but never more.
+
+Render→critique→repair (opt-in, ``QUORUM_LLM_CRITIQUE``, default OFF): a valid
+CREATE scene is additionally scored against the utterance with the keyless
+adherence scorer (``quorum.eval``); below the threshold, ONE further LLM call
+feeds the scorer's concrete failure notes back to the model and the
+higher-scoring attempt wins. Adds at most one call per utterance (worst case
+with everything on: 4 + the rate-limit-retried critique call = 6), never fires
+on the rules/template fast path, and trivial single-part results skip it.
 """
 
 from __future__ import annotations
@@ -32,17 +40,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from quorum.config.settings import Backend, Settings
+
+if TYPE_CHECKING:
+    from quorum.pipeline.retrieval import SemanticRetrieval
 from quorum.domain.geometry import GeometrySpec, ShapeKind
 from quorum.domain.op import ClassifierContext, DesignOp, OpType
 from quorum.domain.parts import PartsPatch, apply_patch
 from quorum.observability import get_logger
-from quorum.pipeline.intent import has_3d_intent
+from quorum.pipeline.intent import has_volumetric_intent
 
 _log = get_logger("pipeline.llm")
 
@@ -65,7 +77,8 @@ Schema:
   "confidence": 0.0..1.0,
   "label": "<1-3 word name for the idea card, e.g. 'cat', 'coffee mug', or null>",
   "geometry": <GeometrySpec or null>,
-  "patch": {"set": [{"part": "<existing part name>", "<field>": <new value>, ...}], "add": [<complete new parts>], "remove": ["<part name>"]} or null
+  "patch": {"set": [{"part": "<existing part name>", "<field>": <new value>, ...}], "add": [<complete new parts>], "remove": ["<part name>"]} or null,
+  "solids": [{"shape": "box|cylinder|wedge|sphere|hemisphere", "x": 0..100, "y": 0..100, "z": 0..100, "w": >0, "d": >0, "h": >0, "color": "#rrggbb or null", "name": "<part name>"}] or null
 }
 
 GeometrySpec — pick the SIMPLEST kind that expresses the intent:
@@ -82,9 +95,11 @@ PAINTER'S Z-ORDER: parts render in list order — later parts are drawn ON TOP o
 
 Rules:
 - "create" for a new idea; "branch" when it's a variant of the current focus; "modify" to change an existing node (set target_node_id from context); "focus" for preferences (preference_signal: "let's go with"≈1, "maybe"≈0.3, rejection negative); "prune" to remove; "connect" to link two existing nodes; "noop" if it is not a design intent.
-- create vs modify: a NEW standalone object ("a cube", "a smartphone", "a 3D engine", "a bicycle") is ALWAYS "create" — even when a focus exists. Only pick "modify" when the words explicitly refer back to the current design using words like "add ...", "give it ...", "put a ... on it", "make it ...", "now ... to it". When in doubt, CREATE — replacing someone's idea is worse than adding a new card.
+- create vs modify: a NEW standalone object or arrangement ("a cube", "a smartphone", "a 3D engine", "a bicycle", "two spheres", "three boxes in a row") is ALWAYS "create" — even when a focus exists. Only pick "modify" when the words explicitly refer back to the current design using words like "add ...", "give it ...", "put a ... on it", "make it ...", "now ... to it". When in doubt, CREATE — replacing someone's idea is worse than adding a new card.
 - COLOR: "stroke" is the outline; "fill" colors the body. When the speaker asks for color ("a red scarf", "colored in", "fill it in green"), set BOTH per part: fill = the color, fill_style = "solid" (or "hachure" for a sketchy fill), and keep the stroke a darker tone of it. No color mentioned → stroke #1f2937, fill null.
-- 3D look ("a 3D X", "isometric X"): draw the 2-3 VISIBLE faces as separate polygons sharing edges — front face, then top and side as parallelograms offset up-right (Example E). Never draw hidden faces and never stack axis-aligned rectangles for 3D. Fills ON, three shades sell the depth: light top (#e5e7eb), medium front (#9ca3af), dark side (#6b7280). For a 3D assembly ("a 3D engine"), every component gets its faces and components OVERLAP into one connected body.
+- TRUE 3D — PREFER "solids" for anything volumetric ("a 3D box/cube", "a cylinder", "an isometric engine", "a wedge/ramp", any solid or assembly of solids). Emit op_type "create" (or "modify" to rebuild the focus as 3D), set "geometry" and "patch" to null, and give a "solids" list. Each solid is an axis-aligned block placed in a RELATIVE 3D space — x→right, y→UP, z→toward you (depth); (x,y,z) is its near-bottom-left corner and (w,d,h) its size along x / z / y. ONLY relative position and size matter: the system does the exact 30° isometric projection, face shading (light top, medium front, dark side), hidden-face removal and depth-sorting, then centers and scales the whole result. Build an assembly by OVERLAPPING and stacking solids into one connected body (a piston engine = one wide block box with cylinders sitting on its top face, example J). "sphere" is a ball inscribed in its (w,d,h) box (a snowman body, a planet); "hemisphere" is a dome resting flat-side-down at y (an igloo, a radar dome). A spoken "sphere"/"hemisphere"/"orb" is ALWAYS a solid, NEVER a flat circle — "two spheres and a bigger sphere" = THREE sphere solids in ONE list (Example K); "a snowman out of spheres" = three sphere solids stacked along y. Give each solid its own "color" and a "name". Do NOT compute faces or projection yourself when you use solids — that is the system's job.
+- 3D by hand (only when "solids" can't express it — a single tilted panel, a wireframe): draw the 2-3 VISIBLE faces as polygons sharing edges, offset up-right (Example E); never draw hidden faces or stack axis-aligned rectangles. Fills ON, three shades: light top (#e5e7eb), medium front (#9ca3af), dark side (#6b7280). For real solids/assemblies prefer "solids" above — its projection is exact.
+- MULTI-OBJECT scenes: a counted arrangement ("two spheres and a bigger sphere", "three boxes in a row") is ONE "create" containing ALL N objects — count them in your output; never fewer, and never a "modify" of the focus. SIZE words are quantitative: "bigger"/"big" means ≥ 1.5x the diameter of its plain neighbours, "small"/"little" ≤ 0.6x — after placing your numbers, re-check that the comparative object really IS the largest/smallest in the scene. NO size word ("three spheres in a row") = ALL IDENTICAL sizes, evenly spaced; a "row" of solids shares one ground y and one depth z, spread along x. DISTINCT side-by-side objects NEVER overlap: leave a visible gap between their boxes ("in the middle"/"between" = the middle object centered with the others flanking it symmetrically); overlap only what physically attaches (a snowman's stacked spheres sink slightly into each other). Keep every object fully inside the canvas: center ± half-size stays within 0..100.
 - GEOMETRIC RELATIONS are exact — compute the numbers, never just place shapes near each other:
   * tangent to a circle (center c, radius r): pick a touch point T = c + r*(cos a, sin a); the line passes through T perpendicular to the radius, i.e. along (-sin a, cos a). Endpoints = T ± L*(-sin a, cos a). The line's distance from c must equal r exactly — it touches at ONE point and never crosses the rim.
   * perpendicular: directions at 90° (dot product 0). parallel: equal directions, offset apart. concentric: identical center, different radii. inscribed: inner shape's rim touches the outer shape from inside. through the center / diameter: the segment passes through c.
@@ -111,7 +126,7 @@ Example C — "a heart" (smooth path, absolute uppercase commands):
 Example D — "now add five thrusters" while context.focus_node_id="n3" and context.focus_geometry is a group whose parts contain {"kind":"polygon","name":"funnel-body","points":[[12,28],[12,72],[58,56],[86,52],[86,48],[58,44]],...} (a funnel on its side). Copy the funnel part verbatim, append the thrusters, op is modify:
 {"op_type":"modify","target_shape":"group","target_node_id":"n3","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.85,"geometry":{"kind":"group","x":50,"y":50,"width":90,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"polygon","name":"funnel-body","x":50,"y":50,"width":74,"height":44,"corner_radius":0,"stroke":"#1f2937","points":[[12,28],[12,72],[58,56],[86,52],[86,48],[58,44]],"parts":[]},{"kind":"rectangle","name":"thruster-1","x":7,"y":32,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-2","x":7,"y":41,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-3","x":7,"y":50,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-4","x":7,"y":59,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]},{"kind":"rectangle","name":"thruster-5","x":7,"y":68,"width":8,"height":7,"corner_radius":2,"stroke":"#b91c1c","parts":[]}]}}
 
-Example E — "a 3D cube" (CREATE a new idea even though a focus exists; isometric = 3 visible faces, fill shading sells the depth):
+Example E — "a 3D cube" drawn BY HAND (FALLBACK ONLY — for a real solid like a cube PREFER "solids" / Example J; this polygon-face form is for tilted panels or wireframes that "solids" cannot express). CREATE a new idea even though a focus exists; isometric = 3 visible faces, fill shading sells the depth:
 {"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"geometry":{"kind":"group","x":50,"y":50,"width":60,"height":60,"corner_radius":0,"stroke":"#1f2937","parts":[{"kind":"polygon","name":"face-front","x":50,"y":60,"width":36,"height":36,"corner_radius":0,"stroke":"#1f2937","fill":"#9ca3af","fill_style":"solid","points":[[32,42],[68,42],[68,78],[32,78]],"parts":[]},{"kind":"polygon","name":"face-top","x":57,"y":35,"width":50,"height":14,"corner_radius":0,"stroke":"#1f2937","fill":"#e5e7eb","fill_style":"solid","points":[[32,42],[46,28],[82,28],[68,42]],"parts":[]},{"kind":"polygon","name":"face-right","x":75,"y":53,"width":14,"height":50,"corner_radius":0,"stroke":"#1f2937","fill":"#6b7280","fill_style":"solid","points":[[68,42],[82,28],[82,64],[68,78]],"parts":[]}]}}
 
 Example F — "now draw a line tangent to it" while context.focus_geometry is {"kind":"circle","name":"circle","x":40,"y":55,"width":44,"height":44} (center (40,55), r=22). Touch point at angle -45°: T = (40+22*0.707, 55-22*0.707) = (55.6,39.4); the tangent runs along (0.707,0.707), endpoints T ± 28 in that direction. Distance from (40,55) to the line = 22 = r, exactly:
@@ -125,6 +140,12 @@ Example H — "add two eyes to it" while context.focus_geometry is a mouse group
 
 Example I — "make the left eye bigger" while focus_geometry has parts eye-left and eye-right. A SET-only patch — two fields, nothing else emitted:
 {"op_type":"modify","target_shape":"group","target_node_id":"n2","relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"label":null,"geometry":null,"patch":{"set":[{"part":"eye-left","width":7,"height":7}],"add":[],"remove":[]}}
+
+Example J — "a 3D engine with three pistons" (TRUE 3D via solids — you only place axis-aligned blocks in relative space, overlapping into one body; the system projects, shades, hides back faces, depth-sorts, and fits the result. The block is y=0..22; the pistons sit on its top face at y=22):
+{"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"label":"engine","geometry":null,"patch":null,"solids":[{"shape":"box","x":8,"y":0,"z":10,"w":64,"d":34,"h":22,"color":"#6b7280","name":"block"},{"shape":"cylinder","x":16,"y":22,"z":20,"w":12,"d":12,"h":20,"color":"#9ca3af","name":"piston-1"},{"shape":"cylinder","x":34,"y":22,"z":20,"w":12,"d":12,"h":20,"color":"#9ca3af","name":"piston-2"},{"shape":"cylinder","x":52,"y":22,"z":20,"w":12,"d":12,"h":20,"color":"#9ca3af","name":"piston-3"}]}
+
+Example K — "two spheres and a bigger sphere in the middle" (multi-object solids: ALL THREE spheres in one list, resting on the same ground y=0, the middle one genuinely bigger — 40 vs 26 diameter — and a clear gap between the boxes: x spans 0-26, 30-70, 74-100 never overlap):
+{"op_type":"create","target_shape":"group","target_node_id":null,"relation_to_node":null,"modifiers":[],"preference_signal":0.0,"confidence":0.9,"label":"three spheres","geometry":null,"patch":null,"solids":[{"shape":"sphere","x":0,"y":0,"z":20,"w":26,"d":26,"h":26,"color":"#e5e7eb","name":"sphere-left"},{"shape":"sphere","x":30,"y":0,"z":13,"w":40,"d":40,"h":40,"color":"#d1d5db","name":"sphere-middle"},{"shape":"sphere","x":74,"y":0,"z":20,"w":26,"d":26,"h":26,"color":"#e5e7eb","name":"sphere-right"}]}
 """
 
 
@@ -268,6 +289,20 @@ def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
                 if isinstance(entry, dict):
                     _repair_geometry_dict(entry)
 
+    # Solids (plan.md §11 D3): clamp placement into 0..100 and sizes positive
+    # before validation — repair, not reject. project_solids fits the assembly
+    # to the box afterward, so loose numbers still produce a valid drawing.
+    if isinstance(data.get("solids"), list):
+        for solid in data["solids"]:
+            if not isinstance(solid, dict):
+                continue
+            for key in ("x", "y", "z"):
+                if isinstance(solid.get(key), (int, float)):
+                    solid[key] = _clamp(float(solid[key]), 0.0, 100.0)
+            for key in ("w", "d", "h"):
+                if isinstance(solid.get(key), (int, float)):
+                    solid[key] = _clamp(float(solid[key]), 0.001, 100.0)
+
     # First attempt: validate the full payload as-is (post-clamp)
     try:
         return _LLMPayload.model_validate(data)
@@ -285,6 +320,25 @@ def _parse_and_repair(raw_json: str) -> _LLMPayload | None:
                 pass
 
     return None
+
+
+class _SolidSpec(BaseModel):
+    """One axis-aligned 3D solid the model places in a RELATIVE world space
+    (plan.md §11 D3). The model only supplies rough placement/size; the code
+    (``domain/isometric.project_solids``) does ALL projection, shading,
+    hidden-face removal, depth-sorting and fitting — "model proposes, code
+    disposes", the same pattern as tangency/recolor/extrusion. Out-of-range
+    numbers are clamped before validation (see ``_repair_geometry_dict``)."""
+
+    shape: str = "box"
+    x: float = Field(default=0.0, ge=0, le=100)
+    y: float = Field(default=0.0, ge=0, le=100)
+    z: float = Field(default=0.0, ge=0, le=100)
+    w: float = Field(default=20.0, gt=0, le=100)
+    d: float = Field(default=20.0, gt=0, le=100)
+    h: float = Field(default=20.0, gt=0, le=100)
+    color: str | None = None
+    name: str | None = Field(default=None, max_length=40)
 
 
 class _LLMPayload(BaseModel):
@@ -306,6 +360,26 @@ class _LLMPayload(BaseModel):
     # research-verified to be far more reliable than verbatim re-serialization
     # (the model emits only what changes; our code composes the new scene).
     patch: PartsPatch | None = None
+    # TRUE 3D (plan.md §11 D3): axis-aligned solids the code projects to an
+    # exact isometric GROUP. Transient — never stored; projected in
+    # `payload_to_op` before the op leaves this stage, so the engine/replay and
+    # both renderers only ever see the resulting flat polygon/path GROUP.
+    solids: list[_SolidSpec] | None = None
+
+
+def _payload_kind(payload: _LLMPayload) -> str:
+    """Which output channel the model used — for the D4 adherence diagnostic.
+
+    Precedence mirrors ``payload_to_op``: solids project to a 3D group, else a
+    patch composes against the focus, else a full geometry, else nothing.
+    """
+    if payload.solids:
+        return "solids"
+    if payload.patch is not None:
+        return "patch"
+    if payload.geometry is not None:
+        return "geometry"
+    return "none"
 
 
 def payload_to_op(
@@ -316,6 +390,7 @@ def payload_to_op(
     raw_text: str,
     focus_geometry: GeometrySpec | None = None,
     focus_node_id: str | None = None,
+    max_parts: int = 60,
 ) -> DesignOp:
     """Stamp a validated LLM payload with provenance to make a real DesignOp.
 
@@ -346,11 +421,14 @@ def payload_to_op(
 
     geometry = payload.geometry
     target_node_id = payload.target_node_id
+    # Projected 3D is already exact — it must NOT pass through snap_relations,
+    # whose `inside`/`within` snap would yank a cylinder cap into the body.
+    from_solids = False
     if payload.patch is not None:
         if focus_geometry is None:
             _log.warning("llm_patch_without_focus", utterance_id=utterance_id)
         else:
-            patched, warnings = apply_patch(focus_geometry, payload.patch)
+            patched, warnings = apply_patch(focus_geometry, payload.patch, max_parts=max_parts)
             for w in warnings:
                 _log.warning("llm_patch_clause_dropped", reason=w, utterance_id=utterance_id)
             if patched == focus_geometry:
@@ -360,6 +438,44 @@ def payload_to_op(
                 # The patch was computed against the FOCUS scene; pointing the
                 # op anywhere else would graft this geometry onto the wrong node.
                 target_node_id = focus_node_id or payload.target_node_id
+    elif payload.solids:
+        # TRUE 3D (plan.md §11 D3): the model placed axis-aligned solids in
+        # relative space; WE do the exact 30° isometric projection, shading,
+        # hidden-face removal, depth-sort and fit. The engine and both
+        # renderers only ever see the resulting flat polygon/path GROUP, so
+        # replay and the wire contract are untouched.
+        from quorum.domain.isometric import Solid, project_solids
+
+        if payload.geometry is not None:
+            # The prompt says emit geometry=null with solids; if the model sent
+            # both, the projection wins — log it so the discard is traceable.
+            _log.warning("llm_solids_overrides_geometry", utterance_id=utterance_id)
+        projected = project_solids(
+            [
+                Solid(
+                    shape=s.shape,
+                    x=s.x,
+                    y=s.y,
+                    z=s.z,
+                    w=s.w,
+                    d=s.d,
+                    h=s.h,
+                    color=s.color,
+                    name=s.name,
+                )
+                for s in payload.solids
+            ],
+            max_parts=max_parts,
+        )
+        if projected is not None:
+            geometry = projected
+            from_solids = True
+            # On a MODIFY the projection replaces the whole scene; aim it at the
+            # FOCUSED node (mirror the patch branch) so a hallucinated
+            # target_node_id can't graft the 3D body onto the wrong card. A
+            # CREATE keeps target_node_id None (it's a new idea).
+            if payload.op_type is OpType.MODIFY:
+                target_node_id = focus_node_id or payload.target_node_id
 
     return DesignOp(
         op_type=payload.op_type,
@@ -368,7 +484,11 @@ def payload_to_op(
         relation_to_node=payload.relation_to_node,
         modifiers=payload.modifiers,
         preference_signal=payload.preference_signal,
-        geometry=snap_relations(raw_text, geometry, focus_geometry=focus_geometry),
+        geometry=(
+            geometry
+            if from_solids
+            else snap_relations(raw_text, geometry, focus_geometry=focus_geometry)
+        ),
         label=label,
         speaker_id=speaker_id,
         utterance_id=utterance_id,
@@ -390,6 +510,20 @@ def _noop(*, speaker_id: str, utterance_id: str, raw_text: str) -> DesignOp:
     )
 
 
+@dataclass(frozen=True)
+class _Tier:
+    """One model endpoint the classifier can send to (fast or escalation).
+
+    Immutable so a single instance can be shared across concurrent rooms and
+    threaded through a request's calls without any mutable per-request state on
+    the process-wide classifier.
+    """
+
+    backend: Backend
+    model: str
+    api_key: str | None
+
+
 class LLMClassifier:
     """Stage C. Satisfies the :class:`~quorum.pipeline.interfaces.Classifier`
     Protocol so the cascade can hold it behind the same seam as the rules stage."""
@@ -402,27 +536,104 @@ class LLMClassifier:
         api_key: str | None = None,
         ollama_url: str = "http://localhost:11434",
         timeout_s: float = 8.0,
+        record_diagnostics: bool = False,
+        retrieval: SemanticRetrieval | None = None,
+        critique: bool = False,
+        critique_threshold: float = 0.8,
+        max_scene_parts: int = 60,
+        escalation_backend: Backend | None = None,
+        escalation_model: str = "",
+        escalation_api_key: str | None = None,
     ) -> None:
         self._backend = backend
         self._model = model
         self._api_key = api_key
         self._ollama_url = ollama_url.rstrip("/")
         self._timeout = timeout_s
+        # Two-tier routing (D4 part 2, default OFF). The fast tier serves every
+        # utterance; the escalation tier — a stronger model — serves only ones
+        # flagged intricate/3D (see `_pick_tier`). When no escalation tier is
+        # configured, `_escalation_tier` is None and every call uses the fast
+        # tier, so behavior is byte-identical to the single-tier default.
+        self._fast_tier = _Tier(backend=backend, model=model, api_key=api_key)
+        self._escalation_tier: _Tier | None = (
+            _Tier(
+                backend=escalation_backend,
+                model=escalation_model,
+                api_key=escalation_api_key,
+            )
+            if escalation_backend is not None
+            else None
+        )
+        # Optional embeddings tier (plan.md §3.3 stage B): semantic few-shot
+        # references + a near-duplicate CREATE cache. None = off (the default).
+        self._retrieval = retrieval
+        # Opt-in render→critique→repair pass (QUORUM_LLM_CRITIQUE, default OFF):
+        # score a CREATE scene with the keyless adherence scorer; below the
+        # threshold, spend ONE extra LLM call on a repair and keep the better
+        # attempt. Stage C only — the rules fast path never sees this.
+        self._critique = critique
+        self._critique_threshold = critique_threshold
+        # Soft parts-per-scene cap (QUORUM_MAX_SCENE_PARTS, default 60) applied
+        # by the projection/patch code paths this stage drives.
+        self._max_parts = max_scene_parts
+        # Opt-in eval hook (plan.md §11 D4): when True, `classify` records the
+        # shape of each raw payload ("solids"/"patch"/"geometry"/"none") so the
+        # adherence harness can report which path the model chose. Default OFF —
+        # the server never reads it, so no shared mutable state is written there.
+        self._record_diagnostics = record_diagnostics
+        self.last_payload_kind: str | None = None
+
+    def _pick_tier(self, text: str) -> _Tier:
+        """Fast tier for everything; escalation tier for intricate/3D prompts.
+
+        The gate is ``has_volumetric_intent`` — the 3D signal the rules stage
+        uses to force escalation to stage C, widened with solids named outright
+        ("sphere"/"hemisphere") — so an "engine with pistons", "isometric cube"
+        or "two spheres and a bigger sphere" routes to the stronger model while
+        flat shapes stay fast. No escalation tier configured ⇒ always fast.
+        """
+        if self._escalation_tier is not None and has_volumetric_intent(text):
+            return self._escalation_tier
+        return self._fast_tier
 
     @classmethod
     def from_settings(cls, settings: Settings) -> LLMClassifier:
+        from quorum.pipeline.retrieval import get_retrieval
+
+        retrieval = get_retrieval(settings)  # process-wide singleton (shared across rooms)
+        esc_backend = settings.llm_escalation_backend
+        shared: dict[str, Any] = {
+            "timeout_s": settings.llm_timeout_s,
+            "retrieval": retrieval,
+            "critique": settings.llm_critique,
+            "critique_threshold": settings.llm_critique_threshold,
+            "max_scene_parts": settings.max_scene_parts,
+            "escalation_backend": esc_backend,
+            "escalation_model": settings.llm_escalation_model,
+            "escalation_api_key": (
+                settings.require_key_for(esc_backend) if esc_backend is not None else None
+            ),
+        }
         if settings.llm_backend is Backend.GROQ:
             return cls(
                 backend=Backend.GROQ,
                 model=settings.groq_model,
                 api_key=settings.require_groq_key(),
-                timeout_s=settings.llm_timeout_s,
+                **shared,
+            )
+        if settings.llm_backend is Backend.OPENROUTER:
+            return cls(
+                backend=Backend.OPENROUTER,
+                model=settings.openrouter_model,
+                api_key=settings.require_openrouter_key(),
+                **shared,
             )
         return cls(
             backend=Backend.LOCAL,
             model=settings.ollama_model,
             ollama_url=settings.ollama_url,
-            timeout_s=settings.llm_timeout_s,
+            **shared,
         )
 
     async def classify(
@@ -433,14 +644,26 @@ class LLMClassifier:
         utterance_id: str,
         context: ClassifierContext,
     ) -> DesignOp:
+        if self._record_diagnostics:
+            self.last_payload_kind = None
         try:
-            raw = await self._complete(text, context)
+            # Embeddings tier (optional): warm the reference index once, then try
+            # the near-duplicate CREATE cache before spending an LLM round-trip.
+            cache_op, refs = await self._retrieve(text, speaker_id, utterance_id)
+            if cache_op is not None:
+                return cache_op  # near-duplicate create — LLM skipped
+
+            # Pick the model tier ONCE per utterance and use it for every call
+            # this request makes (initial, corrective retry, critique repair).
+            tier = self._pick_tier(text)
+
+            raw = await self._complete(text, context, references=refs, tier=tier)
             payload = _parse_and_repair(raw)
 
             if payload is None:
                 # Repair failed — make ONE corrective retry with the validation
                 # error fed back to the model so it can self-correct.
-                payload = await self._corrective_retry(raw, text, context)
+                payload = await self._corrective_retry(raw, text, context, tier=tier)
 
             if payload is None:
                 # Both attempts exhausted — degrade gracefully.
@@ -457,7 +680,33 @@ class LLMClassifier:
                 raw_text=text,
                 focus_geometry=context.focus_geometry,
                 focus_node_id=context.focus_node_id,
+                max_parts=self._max_parts,
             )
+
+            if self._critique:
+                # Render→critique→repair (default OFF): at most ONE extra call.
+                payload, op = await self._critique_and_repair(
+                    payload,
+                    op,
+                    text,
+                    context,
+                    speaker_id=speaker_id,
+                    utterance_id=utterance_id,
+                    tier=tier,
+                )
+
+            if self._record_diagnostics:
+                self.last_payload_kind = _payload_kind(payload)
+            # Remember a fresh standalone CREATE so a near-duplicate request can
+            # reuse it later (skipping the LLM). Modifies/composes are excluded
+            # (target_node_id set) — reusing those would be context-wrong.
+            if (
+                self._retrieval is not None
+                and op.op_type is OpType.CREATE
+                and op.geometry is not None
+                and op.target_node_id is None
+            ):
+                await self._retrieval.remember(text, op.geometry)
             _log.debug("llm_classified", op_type=str(op.op_type), confidence=op.confidence)
             return op
         except Exception as exc:
@@ -465,10 +714,68 @@ class LLMClassifier:
             _log.warning("llm_classify_failed", error=str(exc), backend=str(self._backend))
             return _noop(speaker_id=speaker_id, utterance_id=utterance_id, raw_text=text)
 
+    async def _retrieve(
+        self, text: str, speaker_id: str, utterance_id: str
+    ) -> tuple[DesignOp | None, list[tuple[str, GeometrySpec]] | None]:
+        """Embeddings-tier work for one utterance. Returns ``(cache_op, refs)``:
+        a ready CREATE op on a near-duplicate cache hit (then refs is None), else
+        the semantic few-shot references. ``(None, None)`` when retrieval is off."""
+        if self._retrieval is None:
+            return None, None
+        if not self._retrieval.indexed:
+            from quorum.pipeline.templates import all_templates
+
+            await asyncio.to_thread(self._retrieval.index_references, all_templates())
+        cached = await self._retrieval.cached(text)
+        if cached is not None:
+            if self._record_diagnostics:
+                self.last_payload_kind = "cache"
+            _log.info("llm_cache_hit", utterance_id=utterance_id)
+            from quorum.pipeline.templates import match
+
+            label = cached.label
+            if label is None:
+                hits = match(text, limit=1)
+                label = hits[0][0] if hits else None
+            cache_op = DesignOp(
+                op_type=OpType.CREATE,
+                target_shape=cached.kind,
+                geometry=cached,
+                label=label,
+                speaker_id=speaker_id,
+                utterance_id=utterance_id,
+                confidence=0.9,
+                source_stage="cache",
+                raw_text=text,
+            )
+            return cache_op, None
+        return None, await self._retrieval.references(text)
+
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _user_payload(text: str, context: ClassifierContext) -> str:
+    def _user_payload(
+        text: str,
+        context: ClassifierContext,
+        references: list[tuple[str, GeometrySpec]] | None = None,
+    ) -> str:
         from quorum.pipeline.templates import match
+
+        # Known-good reference sketches the model ADAPTS (not invents). Semantic
+        # references (embeddings tier) win when supplied; otherwise fall back to
+        # keyword template match. Suppressed on volumetric intent — flat QuickDraw
+        # doodles fight 3D requests, and the flat circle+equator 'sphere' template
+        # teaches the model to answer "two spheres" with flat circles instead of
+        # sphere solids.
+        if has_volumetric_intent(text):
+            ref_pairs: list[tuple[str, GeometrySpec]] = []
+        elif references is not None:
+            ref_pairs = references
+        else:
+            ref_pairs = [(name, spec) for name, _, spec in match(text, limit=2)]
+        reference_sketches = [
+            {"name": name, "geometry": spec.model_dump(mode="json", exclude_defaults=True)}
+            for name, spec in ref_pairs
+        ] or None
 
         return json.dumps(
             {
@@ -490,42 +797,52 @@ class LLMClassifier:
                         if context.focus_geometry is not None
                         else None
                     ),
-                    # Known-good sketches for concepts the utterance mentions
-                    # (mined from real drawings) — the model adapts, not invents.
-                    # Flat QuickDraw doodles fight 3D intent, so suppress them.
-                    "reference_sketches": (
-                        None  # flat doodles fight 3D intent — suppress them
-                        if has_3d_intent(text)
-                        else [
-                            {
-                                "name": name,
-                                "geometry": spec.model_dump(mode="json", exclude_defaults=True),
-                            }
-                            for name, _, spec in match(text, limit=2)
-                        ] or None
-                    ),
+                    "reference_sketches": reference_sketches,
                 },
             }
         )
 
-    async def _complete(self, text: str, context: ClassifierContext) -> str:
-        user = self._user_payload(text, context)
+    async def _complete(
+        self,
+        text: str,
+        context: ClassifierContext,
+        *,
+        references: list[tuple[str, GeometrySpec]] | None = None,
+        tier: _Tier | None = None,
+    ) -> str:
+        user = self._user_payload(text, context, references)
         messages = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ]
-        return await self._send(messages)
+        return await self._send(messages, tier=tier)
 
-    async def _send(self, messages: list[dict[str, str]]) -> str:
-        """Send a message list to the configured backend; return the raw content string."""
+    # Per-backend OpenAI-compatible endpoint URLs.
+    _OPENAI_COMPAT_URLS: ClassVar[dict[Backend, str]] = {
+        Backend.GROQ: "https://api.groq.com/openai/v1/chat/completions",
+        Backend.OPENROUTER: "https://openrouter.ai/api/v1/chat/completions",
+    }
+
+    async def _send(self, messages: list[dict[str, str]], *, tier: _Tier | None = None) -> str:
+        """Send a message list to a model tier; return the raw content string.
+
+        ``tier`` selects the endpoint (fast vs escalation). None = the fast tier,
+        so existing single-tier callers are unaffected.
+        """
+        t = tier or self._fast_tier
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            if self._backend is Backend.GROQ:
+            if t.backend in (Backend.GROQ, Backend.OPENROUTER):
+                url = self._OPENAI_COMPAT_URLS[t.backend]
+                headers: dict[str, str] = {"Authorization": f"Bearer {t.api_key}"}
+                if t.backend is Backend.OPENROUTER:
+                    headers["HTTP-Referer"] = "https://github.com/quorum"
+                    headers["X-Title"] = "Quorum"
                 resp = await self._post_with_retry(
                     client,
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    url,
+                    headers=headers,
                     json={
-                        "model": self._model,
+                        "model": t.model,
                         "messages": messages,
                         "temperature": 0,
                         "response_format": {"type": "json_object"},
@@ -538,7 +855,7 @@ class LLMClassifier:
             resp = await client.post(
                 f"{self._ollama_url}/api/chat",
                 json={
-                    "model": self._model,
+                    "model": t.model,
                     "messages": messages,
                     "format": "json",
                     "stream": False,
@@ -554,6 +871,8 @@ class LLMClassifier:
         bad_raw: str,
         text: str,
         context: ClassifierContext,
+        *,
+        tier: _Tier | None = None,
     ) -> _LLMPayload | None:
         """Feed the bad reply + a corrective prompt back to the model for ONE retry.
 
@@ -584,7 +903,7 @@ class LLMClassifier:
             {"role": "user", "content": corrective_message},
         ]
         try:
-            raw2 = await self._send(messages)
+            raw2 = await self._send(messages, tier=tier)
         except Exception as exc:
             _log.warning("llm_corrective_retry_failed", error=str(exc))
             return None
@@ -595,6 +914,110 @@ class LLMClassifier:
         else:
             _log.info("llm_corrective_retry_succeeded", backend=str(self._backend))
         return payload
+
+    async def _critique_and_repair(
+        self,
+        payload: _LLMPayload,
+        op: DesignOp,
+        text: str,
+        context: ClassifierContext,
+        *,
+        speaker_id: str,
+        utterance_id: str,
+        tier: _Tier | None = None,
+    ) -> tuple[_LLMPayload, DesignOp]:
+        """Render→critique→repair pass — the D4 adherence scorer applied LIVE.
+
+        Score the CREATE scene against expectations parsed from the utterance
+        (keyless, pure — ``quorum.eval``); when it falls below the configured
+        threshold, make ONE further LLM call whose user payload carries the
+        previous JSON answer plus the scorer's concrete failure notes, then
+        keep whichever attempt scores higher (ties keep the first — the repair
+        must be STRICTLY better to replace it). Same degradation stance as the
+        corrective retry: any failure in here returns the original attempt.
+        Trivial results (single-part geometry) skip the pass entirely.
+        """
+        from quorum.eval.adherence import score
+        from quorum.eval.expectations import parse_expectation
+        from quorum.pipeline.renderer import get_renderer
+
+        if op.op_type is not OpType.CREATE or op.geometry is None:
+            return payload, op
+        geom = op.geometry
+        n_parts = len(geom.parts) if geom.kind is ShapeKind.GROUP else 1
+        if n_parts < 2:
+            return payload, op  # trivial — not worth the extra call
+
+        def _rendered_ok(g: GeometrySpec) -> bool:
+            try:
+                get_renderer().render(g)  # pure + cached; no I/O
+                return True
+            except Exception:
+                return False
+
+        expect = parse_expectation(text)
+        first = score(
+            geom,
+            expect,
+            rendered_ok=_rendered_ok(geom),
+            payload_kind=_payload_kind(payload),
+        )
+        if first.overall >= self._critique_threshold:
+            return payload, op
+
+        # ONE repair turn: the original user payload extended with the previous
+        # answer and the scorer's failure notes as explicit feedback.
+        feedback: dict[str, Any] = json.loads(self._user_payload(text, context))
+        feedback["previous_attempt"] = payload.model_dump(mode="json", exclude_none=True)
+        feedback["critique"] = list(first.notes)
+        feedback["instruction"] = "Fix these issues; return the full corrected JSON."
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(feedback)},
+        ]
+        try:
+            raw2 = await self._send(messages, tier=tier)
+        except Exception as exc:
+            _log.warning("llm_critique_call_failed", error=str(exc))
+            return payload, op
+
+        payload2 = _parse_and_repair(raw2)
+        if payload2 is None:
+            _log.warning("llm_critique_repair_invalid", backend=str(self._backend))
+            return payload, op
+        op2 = payload_to_op(
+            payload2,
+            speaker_id=speaker_id,
+            utterance_id=utterance_id,
+            raw_text=text,
+            focus_geometry=context.focus_geometry,
+            focus_node_id=context.focus_node_id,
+            max_parts=self._max_parts,
+        )
+        if op2.op_type is not OpType.CREATE or op2.geometry is None:
+            _log.warning("llm_critique_repair_not_create", utterance_id=utterance_id)
+            return payload, op
+        second = score(
+            op2.geometry,
+            expect,
+            rendered_ok=_rendered_ok(op2.geometry),
+            payload_kind=_payload_kind(payload2),
+        )
+        if second.overall > first.overall:
+            _log.info(
+                "llm_critique_repaired",
+                first=round(first.overall, 2),
+                second=round(second.overall, 2),
+                utterance_id=utterance_id,
+            )
+            return payload2, op2
+        _log.info(
+            "llm_critique_kept_first",
+            first=round(first.overall, 2),
+            second=round(second.overall, 2),
+            utterance_id=utterance_id,
+        )
+        return payload, op
 
     @staticmethod
     async def _post_with_retry(

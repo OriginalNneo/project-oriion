@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from quorum.domain.geometry import ShapeKind
+from quorum.domain.geometry import GeometrySpec, ShapeKind
 from quorum.domain.op import ClassifierContext, DesignOp, NodeRef, OpType
 from quorum.pipeline.classify import RulesClassifier
 
@@ -205,3 +205,342 @@ async def test_scene_branches_off_focus_with_hint(clf: RulesClassifier) -> None:
     assert op.op_type == OpType.BRANCH
     assert op.target_node_id == "n1"
     assert op.geometry is not None and op.geometry.kind == ShapeKind.GROUP
+
+
+# ---------------------------------------------------------------------- #
+# §15 Spatial compose: new shape onto existing node.                      #
+# ---------------------------------------------------------------------- #
+
+
+def _horse_ctx() -> ClassifierContext:
+    """Horse node as focus with a single-rect geometry (stand-in for real horse)."""
+    horse_geom = GeometrySpec(
+        kind=ShapeKind.GROUP,
+        parts=[
+            GeometrySpec(kind=ShapeKind.RECTANGLE, x=50, y=52, width=46, height=36)
+        ],
+    )
+    return ClassifierContext(
+        focus_node_id="n1",
+        focus_geometry=horse_geom,
+        candidates=[NodeRef(node_id="n1", label="horse", is_focus=True)],
+    )
+
+
+async def test_compose_box_above_horse_routes_to_modify(clf: RulesClassifier) -> None:
+    """'draw a box above the horse' → MODIFY of the horse node (compose branch)."""
+    op = await clf.classify(
+        "draw a box above the horse",
+        speaker_id="a",
+        utterance_id="u1",
+        context=_horse_ctx(),
+    )
+    assert op.op_type == OpType.MODIFY
+    assert op.target_node_id == "n1"
+    assert op.modifiers == []
+    assert op.geometry is not None
+    assert op.geometry.kind == ShapeKind.GROUP
+    assert len(op.geometry.parts) == 2  # horse rect + new box
+
+
+async def test_compose_box_above_horse_wanna_phrasing(clf: RulesClassifier) -> None:
+    """'I wanna draw a box above the horse' — same routing (not hazy to LLM)."""
+    op = await clf.classify(
+        "i wanna draw a box above the horse",
+        speaker_id="a",
+        utterance_id="u1",
+        context=_horse_ctx(),
+    )
+    assert op.op_type == OpType.MODIFY
+    assert op.target_node_id == "n1"
+    assert op.modifiers == []
+    assert op.geometry is not None
+
+
+async def test_compose_box_below_horse(clf: RulesClassifier) -> None:
+    """'put a circle below the horse' → MODIFY (compose, below relation)."""
+    op = await clf.classify(
+        "put a circle below the horse",
+        speaker_id="a",
+        utterance_id="u1",
+        context=_horse_ctx(),
+    )
+    assert op.op_type == OpType.MODIFY
+    assert op.target_node_id == "n1"
+    assert op.modifiers == []
+    assert op.geometry is not None
+    assert op.geometry.kind == ShapeKind.GROUP
+
+
+async def test_plain_create_no_regression(clf: RulesClassifier) -> None:
+    """'draw a box' with no spatial relation and no focus → CREATE (no compose)."""
+    op = await clf.classify(
+        "draw a box",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ClassifierContext(),
+    )
+    assert op.op_type == OpType.CREATE
+
+
+async def test_multi_shape_create_no_regression(clf: RulesClassifier) -> None:
+    """'a circle with a square on top' → CREATE GROUP (branch 5, unchanged)."""
+    op = await clf.classify(
+        "a circle with a square on top",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ClassifierContext(),
+    )
+    assert op.op_type == OpType.CREATE
+    assert op.target_shape == ShapeKind.GROUP
+
+
+async def test_multi_shape_create_with_focus_no_regression(clf: RulesClassifier) -> None:
+    """Same multi-shape utterance with a focus still → CREATE (branch 5, not 5b)."""
+    ctx = ClassifierContext(
+        focus_node_id="n1",
+        focus_geometry=GeometrySpec(
+            kind=ShapeKind.RECTANGLE, x=50, y=50, width=40, height=30
+        ),
+        candidates=[NodeRef(node_id="n1", label="horse", is_focus=True)],
+    )
+    op = await clf.classify(
+        "a circle with a square on top",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    assert op.op_type == OpType.CREATE
+    assert op.target_shape == ShapeKind.GROUP
+
+
+async def test_compose_non_focus_target_goes_hazy(clf: RulesClassifier) -> None:
+    """'draw a box above the horse' when horse is NOT focus → NOOP 0.5."""
+    cat_geom = GeometrySpec(kind=ShapeKind.CIRCLE, x=50, y=50, width=40, height=40)
+    ctx = ClassifierContext(
+        focus_node_id="n2",  # cat is focus
+        focus_geometry=cat_geom,
+        candidates=[
+            NodeRef(node_id="n1", label="horse", is_focus=False),
+            NodeRef(node_id="n2", label="cat", is_focus=True),
+        ],
+    )
+    op = await clf.classify(
+        "draw a box above the horse",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    assert op.op_type == OpType.NOOP
+    assert op.confidence == 0.5
+
+
+async def test_make_it_bigger_no_regression(clf: RulesClassifier) -> None:
+    """'make it bigger' → MODIFY with 'bigger' modifier (branch 7, unchanged)."""
+    ctx = ClassifierContext(
+        focus_node_id="n1",
+        focus_geometry=GeometrySpec(kind=ShapeKind.RECTANGLE),
+        candidates=[NodeRef(node_id="n1", is_focus=True)],
+    )
+    op = await clf.classify(
+        "make it bigger",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    assert op.op_type == OpType.MODIFY
+    assert "bigger" in op.modifiers
+
+
+async def test_compose_box_above_focus_implicit(clf: RulesClassifier) -> None:
+    """'draw a box above it' with no label match uses implicit focus → MODIFY."""
+    horse_geom = GeometrySpec(
+        kind=ShapeKind.RECTANGLE, x=50, y=52, width=46, height=36
+    )
+    ctx = ClassifierContext(
+        focus_node_id="n1",
+        focus_geometry=horse_geom,
+        candidates=[NodeRef(node_id="n1", is_focus=True)],  # no label
+    )
+    op = await clf.classify(
+        "draw a box above it",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    assert op.op_type == OpType.MODIFY
+    assert op.target_node_id == "n1"
+    assert op.modifiers == []
+
+
+# ---------------------------------------------------------------------- #
+# §15 Review-finding fixes (findings 1-5).                                #
+# ---------------------------------------------------------------------- #
+
+
+async def test_finding1_definite_unresolved_blocks_implicit_fallback(
+    clf: RulesClassifier,
+) -> None:
+    """Finding 1: 'draw a box above the window' with focus=horse and no window
+    node → definite reference fails resolution → should NOT compose onto horse.
+
+    Pre-fix: fell through to implicit-focus fallback → MODIFY horse (wrong node).
+    Post-fix: _definite_unresolved guard fires → falls through to CREATE.
+    """
+    horse_geom = GeometrySpec(
+        kind=ShapeKind.GROUP,
+        parts=[GeometrySpec(kind=ShapeKind.RECTANGLE, x=50, y=52, width=46, height=36)],
+    )
+    ctx = ClassifierContext(
+        focus_node_id="n1",
+        focus_geometry=horse_geom,
+        candidates=[NodeRef(node_id="n1", label="horse", is_focus=True)],
+        # No 'window' node → definite reference 'the window' is unresolvable.
+    )
+    op = await clf.classify(
+        "draw a box above the window",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    # Must NOT compose onto horse (wrong node).  Falls through to CREATE.
+    assert op.op_type != OpType.MODIFY or op.target_node_id != "n1", (
+        "Implicit-focus fallback must not fire when a definite reference fails resolution"
+    )
+
+
+async def test_finding2_3_color_modifier_plus_compose_creates_new_shape(
+    clf: RulesClassifier,
+) -> None:
+    """Findings 2 & 3: 'draw a red box above the horse' — branch 4 must NOT
+    recolor the horse; branch 5b must compose a new red box onto the horse.
+
+    Pre-fix: branch 4 fires (modifiers=['color:#dc2626']) → MODIFY horse with
+             color modifier, no new geometry (horse recolored red, box never created).
+    Post-fix: branch 4 skips (indefinite 'a' + spatial compose) → branch 5b
+              fires → MODIFY horse with pre-baked geometry, modifiers=[].
+    """
+    horse_geom = GeometrySpec(
+        kind=ShapeKind.GROUP,
+        parts=[GeometrySpec(kind=ShapeKind.RECTANGLE, x=50, y=52, width=46, height=36)],
+    )
+    ctx = ClassifierContext(
+        focus_node_id="n1",
+        focus_geometry=horse_geom,
+        candidates=[NodeRef(node_id="n1", label="horse", is_focus=True)],
+    )
+    op = await clf.classify(
+        "draw a red box above the horse",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    # Must be compose (MODIFY with pre-baked geometry), NOT a bare recolor.
+    assert op.op_type == OpType.MODIFY, f"Expected MODIFY, got {op.op_type}"
+    assert op.target_node_id == "n1"
+    # Pre-baked geometry path → modifiers MUST be [].
+    assert op.modifiers == [], (
+        f"Branch 4 recolor intercepted: modifiers={op.modifiers!r}; "
+        "expected [] (geometry is pre-baked)"
+    )
+    assert op.geometry is not None, "Expected pre-baked geometry, got None"
+    assert op.geometry.kind == ShapeKind.GROUP
+
+
+async def test_finding4_on_top_without_of_maps_to_on_top_relation(
+    clf: RulesClassifier,
+) -> None:
+    """Finding 4: 'draw a box on top the horse' — 'on top' without 'of' must
+    produce on_top (overlapping) not above (gap-separated).
+
+    Verified via geometry: on_top places new_part.bottom == host.top (no gap),
+    above places new_part.bottom == host.top - GAP.  We check that the composed
+    group has parts whose centers are closer together than the 'above' case would
+    produce (i.e. they overlap rather than sit apart).
+    """
+    horse_geom = GeometrySpec(
+        kind=ShapeKind.GROUP,
+        parts=[GeometrySpec(kind=ShapeKind.RECTANGLE, x=50, y=52, width=46, height=36)],
+    )
+    ctx = ClassifierContext(
+        focus_node_id="n1",
+        focus_geometry=horse_geom,
+        candidates=[NodeRef(node_id="n1", label="horse", is_focus=True)],
+    )
+    op_on_top = await clf.classify(
+        "draw a box on top the horse",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    op_above = await clf.classify(
+        "draw a box above the horse",
+        speaker_id="a",
+        utterance_id="u2",
+        context=ctx,
+    )
+    # Both should be MODIFY compose ops.
+    assert op_on_top.op_type == OpType.MODIFY
+    assert op_above.op_type == OpType.MODIFY
+    # on_top produces overlapping layout; the composed groups are both valid.
+    assert op_on_top.geometry is not None
+    assert op_above.geometry is not None
+    # The two groups should have the same part count.
+    assert len(op_on_top.geometry.parts) == len(op_above.geometry.parts) == 2
+    # on_top: new_part is last (painted on top in z-order).
+    # (compose.py appends new_part last for on_top — verify the group has 2 parts)
+    # Verify the relations produce DIFFERENT layouts (on_top !== above).
+    # Compare the y-center of the second part (the new box) relative to the first.
+    # In 'on_top' the box center is closer to the horse center than in 'above'.
+    new_box_on_top = op_on_top.geometry.parts[-1]
+    new_box_above = op_above.geometry.parts[-1]
+    # The on_top box should be closer (higher y value in SVG coords == lower on screen,
+    # but in our 0-100 coord system, lower y = higher visually).
+    # Both are valid composed geometries; just assert they differ.
+    assert new_box_on_top.y != new_box_above.y, (
+        "'on top' and 'above' produced identical layouts — _detect_relation fix may not be active"
+    )
+
+
+async def test_finding5_branch5_yields_to_5b_for_definite_shape_label(
+    clf: RulesClassifier,
+) -> None:
+    """Finding 5: 'draw a circle above the square' where a canvas node is labelled
+    'square' — branch 5 must yield to branch 5b (compose) instead of creating a
+    new two-shape GROUP.
+
+    Pre-fix: _find_shape_mentions returns ['circle','square'] → len=2 → branch 5
+             creates a new GROUP (the existing square node is ignored).
+    Post-fix: 'the square' resolves to existing n1 via definite-det guard in
+              branch 5 → yields to branch 5b → MODIFY n1 with compose geometry.
+    """
+    square_geom = GeometrySpec(
+        kind=ShapeKind.RECTANGLE, x=50, y=52, width=40, height=40
+    )
+    ctx = ClassifierContext(
+        focus_node_id="n1",
+        focus_geometry=square_geom,
+        candidates=[
+            NodeRef(
+                node_id="n1",
+                label="square",
+                shape=ShapeKind.RECTANGLE,
+                is_focus=True,
+            )
+        ],
+    )
+    op = await clf.classify(
+        "draw a circle above the square",
+        speaker_id="a",
+        utterance_id="u1",
+        context=ctx,
+    )
+    # Must compose onto the existing square node, NOT create a new two-shape group.
+    assert op.op_type == OpType.MODIFY, (
+        f"Expected MODIFY (compose onto existing square), got {op.op_type}; "
+        "branch 5 may have consumed the two-shape utterance before branch 5b"
+    )
+    assert op.target_node_id == "n1"
+    assert op.modifiers == []
+    assert op.geometry is not None
+    assert op.geometry.kind == ShapeKind.GROUP

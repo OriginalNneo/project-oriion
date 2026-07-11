@@ -217,12 +217,37 @@ def test_snap_inside_leaves_compliant_and_unrelated_alone() -> None:
     geom = GeometrySpec(kind=ShapeKind.GROUP, parts=[*_ISO_FACES, inside_already])
     assert snap_relations("add a sphere inside", geom,
                           focus_geometry=_FOCUS_CTX.focus_geometry) is geom
-    # no containment word -> untouched even when the part is outside
+    # no spatial word at all -> untouched even when the part is outside
     outside = GeometrySpec(kind=ShapeKind.CIRCLE, name="sphere", x=92, y=12,
                            width=20, height=20)
     geom2 = GeometrySpec(kind=ShapeKind.GROUP, parts=[*_ISO_FACES, outside])
-    assert snap_relations("add a sphere next to it", geom2,
+    assert snap_relations("color the sphere blue", geom2,
                           focus_geometry=_FOCUS_CTX.focus_geometry) is geom2
+
+
+def test_snap_directional_places_new_part_in_stated_direction() -> None:
+    """above/below/left/right/beside snap the new part to the stated side of the
+    host (regression for placement ~20% — directional words were unsnapped)."""
+    from quorum.pipeline.relations import snap_relations
+
+    # host = the 3 iso faces, union bbox (32,28)..(82,78), center (57,53).
+    # The LLM dropped the sphere level with the host; "above it" must lift it up.
+    sphere = GeometrySpec(kind=ShapeKind.CIRCLE, name="sphere", x=55, y=53,
+                          width=20, height=20)
+    geom = GeometrySpec(kind=ShapeKind.GROUP, parts=[*_ISO_FACES, sphere])
+    up = snap_relations("a sphere above it", geom, focus_geometry=_FOCUS_CTX.focus_geometry)
+    assert up is not None and up is not geom
+    moved = up.parts[-1]
+    assert moved.y + moved.height / 2 <= 28 - 3 + 0.6  # bottom sits just above host top
+    assert abs(moved.x - 57) < 1.0                     # centered on host
+    assert up.parts[:3] == _ISO_FACES                  # host untouched
+
+    # "next to it" → adjacent to the RIGHT of the host's right edge (82).
+    geom2 = GeometrySpec(kind=ShapeKind.GROUP, parts=[*_ISO_FACES, sphere])
+    beside = snap_relations("a sphere next to it", geom2, focus_geometry=_FOCUS_CTX.focus_geometry)
+    assert beside is not None and beside is not geom2
+    moved2 = beside.parts[-1]
+    assert moved2.x - moved2.width / 2 >= 82 + 3 - 0.6
 
 
 def test_snap_inside_without_focus_treats_last_part_as_new() -> None:

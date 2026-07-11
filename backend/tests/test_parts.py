@@ -436,6 +436,27 @@ class TestApplyPatch:
         assert len(new_scene.parts) == 60
         assert any("cap" in w or "truncated" in w.lower() for w in warnings)
 
+    def test_parts_cap_is_a_parameter(self) -> None:
+        """The soft cap is configurable (Settings.max_scene_parts seam): a
+        raised cap admits the same adds the default truncates."""
+        many_parts = [
+            GeometrySpec(kind=ShapeKind.CIRCLE, name=f"part-{i}",
+                         x=50.0, y=50.0, width=5.0, height=5.0)
+            for i in range(59)
+        ]
+        scene = GeometrySpec(kind=ShapeKind.GROUP, parts=many_parts)
+        adds = [
+            GeometrySpec(kind=ShapeKind.CIRCLE, name=f"new-{i}",
+                         x=50.0, y=50.0, width=5.0, height=5.0)
+            for i in range(5)
+        ]
+        new_scene, warnings = apply_patch(scene, PartsPatch(add=adds), max_parts=80)
+        assert len(new_scene.parts) == 64  # all 5 adds fit under the raised cap
+        assert not any("cap" in w for w in warnings)
+        low_scene, low_warnings = apply_patch(scene, PartsPatch(add=adds), max_parts=59)
+        assert len(low_scene.parts) == 59
+        assert any("cap (59)" in w for w in low_warnings)
+
     def test_render_patched_scene(self) -> None:
         """Patched scene must be renderable without errors."""
         from quorum.pipeline.renderer import get_renderer

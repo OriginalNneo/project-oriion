@@ -8,6 +8,7 @@ and the live latency ledger (observability is a product requirement).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -31,6 +32,28 @@ _log = get_logger("app")
 # connections in a room share utterance sequencing + the classifier.
 _rooms = RoomManager()
 _handlers: dict[str, MessageHandler] = {}
+# Keeps a strong reference to the background warm-up task so it isn't GC'd
+# mid-flight (asyncio only holds a weak ref to fire-and-forget tasks).
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _warm_retrieval() -> None:
+    """Build the semantic reference index off the request path at startup, so the
+    first utterance doesn't pay the one-time ~3-4 s template-bank embedding cost.
+    Idempotent with the lazy fallback in the LLM stage (index_references is
+    locked), so an utterance arriving mid-warm is correct, just slower once."""
+    from quorum.pipeline.retrieval import get_retrieval
+    from quorum.pipeline.templates import all_templates
+
+    try:
+        retrieval = get_retrieval(settings)
+        if retrieval is None or retrieval.indexed:
+            return
+        await asyncio.to_thread(retrieval.index_references, all_templates())
+        _log.info("retrieval_index_warmed")
+    except Exception as exc:  # best-effort warm; the lazy fallback still covers it
+        # Surface through the app logger, not just asyncio's GC "never retrieved".
+        _log.warning("retrieval_warm_failed", error=str(exc))
 
 
 def _handler_for(room_name: str, manager_room: object) -> MessageHandler:
@@ -48,9 +71,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         version=__version__,
         stt=str(settings.stt_backend),
         llm=str(settings.llm_backend),
+        retrieval=str(settings.retrieval_backend),
         vad_silence_ms=settings.vad_silence_ms,
     )
+    # Warm the semantic index in the background (no-op unless retrieval=local), so
+    # startup stays instant but the index is ready before the first utterance.
+    warm = asyncio.create_task(_warm_retrieval())
+    _background_tasks.add(warm)
+    warm.add_done_callback(_background_tasks.discard)
     yield
+    # Let any in-flight cache write finish before the process exits.
+    from quorum.pipeline.retrieval import get_retrieval
+
+    retrieval = get_retrieval(settings)
+    if retrieval is not None:
+        await retrieval.flush()
     _log.info("shutdown")
 
 

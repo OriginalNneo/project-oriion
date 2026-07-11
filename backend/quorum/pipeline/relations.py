@@ -26,6 +26,24 @@ from quorum.domain.geometry import GeometrySpec, ShapeKind
 
 _TANGENT_RE = re.compile(r"\b(?:tangent\w*|tangential)\b")
 _INSIDE_RE = re.compile(r"\b(?:inside|into|within|in (?:it|the (?:middle|center)))\b")
+# Directional placement words → canonical relation. Ordered: the more specific
+# left/right phrasings are tried before the bare "beside/next to" default.
+# "on top of" is intentionally EXCLUDED here (it's overlap/layered, handled by
+# the compose branch's on_top); these are the unambiguous adjacency directions.
+_DIRECTION_RES: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\b(?:above|atop)\b"), "above"),
+    (re.compile(r"\b(?:below|beneath|underneath|under(?!\s*stand))\b"), "below"),
+    (re.compile(r"\b(?:to the left|on the left|left of|leftward)\b"), "left"),
+    (re.compile(r"\b(?:to the right|on the right|right of|rightward)\b"), "right"),
+    (re.compile(r"\b(?:next to|beside|alongside)\b"), "right"),  # adjacency → right
+]
+
+
+def _detect_direction(lowered: str) -> str | None:
+    for rx, rel in _DIRECTION_RES:
+        if rx.search(lowered):
+            return rel
+    return None
 _TWO_POINT_PATH_RE = re.compile(
     r"^M\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*"
     r"L\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*Z?$"
@@ -43,6 +61,7 @@ def snap_relations(
     lowered = text.lower()
     geom = _snap_all_tangents(lowered, geom)
     geom = _snap_all_inside(lowered, geom, focus_geometry)
+    geom = _snap_all_directional(lowered, geom, focus_geometry)
     return geom
 
 
@@ -156,22 +175,8 @@ def _snap_all_inside(
         return geom
     if not _INSIDE_RE.search(lowered):
         return geom
-    if focus_geometry is not None:
-        old_names = {
-            p.name
-            for p in (
-                focus_geometry.parts
-                if focus_geometry.kind is ShapeKind.GROUP
-                else [focus_geometry]
-            )
-            if p.name
-        }
-        is_new = [bool(p.name) and p.name not in old_names for p in geom.parts]
-        if not any(is_new) or all(is_new):
-            is_new = [False] * (len(geom.parts) - 1) + [True]
-    else:
-        is_new = [False] * (len(geom.parts) - 1) + [True]
-    host_boxes = [_part_bbox(p) for p, new in zip(geom.parts, is_new, strict=True) if not new]
+    is_new = _partition_new(geom.parts, focus_geometry)
+    host_boxes = [part_bbox(p) for p, new in zip(geom.parts, is_new, strict=True) if not new]
     if not host_boxes:
         return geom
     hx1 = min(b[0] for b in host_boxes)
@@ -187,13 +192,124 @@ def _snap_all_inside(
     return geom.model_copy(update={"parts": parts}) if changed else geom
 
 
-def _part_bbox(part: GeometrySpec) -> tuple[float, float, float, float]:
+def _partition_new(
+    parts: list[GeometrySpec], focus_geometry: GeometrySpec | None
+) -> list[bool]:
+    """Flag which parts are NEWLY added vs already in the focused scene.
+
+    With a focus scene, a new part is one whose name is absent from the old
+    parts' names. If that yields nothing (or everything), or there's no focus,
+    fall back to "the LAST part is the addition" — the prompt demands new parts
+    go last. Shared by the inside/directional snappers.
+    """
+    if focus_geometry is not None:
+        old = focus_geometry.parts if focus_geometry.kind is ShapeKind.GROUP else [focus_geometry]
+        old_names = {p.name for p in old if p.name}
+        is_new = [bool(p.name) and p.name not in old_names for p in parts]
+        if any(is_new) and not all(is_new):
+            return is_new
+    return [False] * (len(parts) - 1) + [True]
+
+
+def _translate(part: GeometrySpec, dx: float, dy: float) -> GeometrySpec:
+    """Return a copy of *part* moved by (dx, dy), clamped to 0..100. Polygons move
+    their points; a PATH's `d` is left intact (the validator owns curve data)."""
+    if not dx and not dy:
+        return part
+    updates: dict[str, object] = {
+        "x": min(100.0, max(0.0, part.x + dx)),
+        "y": min(100.0, max(0.0, part.y + dy)),
+    }
+    if part.points is not None:
+        updates["points"] = [
+            (min(100.0, max(0.0, px + dx)), min(100.0, max(0.0, py + dy)))
+            for px, py in part.points
+        ]
+    return part.model_copy(update=updates)
+
+
+def _directional_offset(
+    relation: str,
+    host: tuple[float, float, float, float],
+    new: tuple[float, float, float, float],
+) -> tuple[float, float]:
+    """(dx, dy) to place the *new* bbox in `relation` to the *host* bbox, with a
+    small gap. Mirrors compose._placement_offset for above/below/left/right."""
+    hx1, hy1, hx2, hy2 = host
+    nx1, ny1, nx2, ny2 = new
+    hcx, hcy = (hx1 + hx2) / 2, (hy1 + hy2) / 2
+    ncx, ncy = (nx1 + nx2) / 2, (ny1 + ny2) / 2
+    gap = 3.0
+    if relation == "above":
+        return hcx - ncx, hy1 - gap - ny2
+    if relation == "below":
+        return hcx - ncx, hy2 + gap - ny1
+    if relation == "left":
+        return hx1 - gap - nx2, hcy - ncy
+    if relation == "right":
+        return hx2 + gap - nx1, hcy - ncy
+    return 0.0, 0.0
+
+
+def _snap_all_directional(
+    lowered: str,
+    geom: GeometrySpec | None,
+    focus_geometry: GeometrySpec | None,
+) -> GeometrySpec | None:
+    """Force parts placed above/below/left/right/beside to actually land there.
+
+    Directional placement is the meaning; the exact coordinates the LLM guessed
+    are incidental (live: "a box above the horse" came back level with it). New
+    parts (see ``_partition_new``) are translated as a group by the offset that
+    puts their combined box in the stated direction relative to the host box —
+    same "model proposes, code disposes" pattern as inside/tangent. Projected 3D
+    never reaches here (payload_to_op skips snap_relations for solids).
+    """
+    if geom is None or geom.kind is not ShapeKind.GROUP or len(geom.parts) < 2:
+        return geom
+    relation = _detect_direction(lowered)
+    if relation is None:
+        return geom
+    is_new = _partition_new(geom.parts, focus_geometry)
+    host_boxes = [part_bbox(p) for p, new in zip(geom.parts, is_new, strict=True) if not new]
+    new_boxes = [part_bbox(p) for p, new in zip(geom.parts, is_new, strict=True) if new]
+    if not host_boxes or not new_boxes:
+        return geom
+    host = (
+        min(b[0] for b in host_boxes), min(b[1] for b in host_boxes),
+        max(b[2] for b in host_boxes), max(b[3] for b in host_boxes),
+    )
+    newbox = (
+        min(b[0] for b in new_boxes), min(b[1] for b in new_boxes),
+        max(b[2] for b in new_boxes), max(b[3] for b in new_boxes),
+    )
+    dx, dy = _directional_offset(relation, host, newbox)
+    if abs(dx) < 0.5 and abs(dy) < 0.5:
+        return geom  # already in place
+    parts = [
+        _translate(p, dx, dy) if new else p
+        for p, new in zip(geom.parts, is_new, strict=True)
+    ]
+    return geom.model_copy(update={"parts": parts})
+
+
+def part_bbox(part: GeometrySpec) -> tuple[float, float, float, float]:
+    """Return the axis-aligned bounding box of *part* as (x1, y1, x2, y2).
+
+    Public so :mod:`quorum.domain.compose` and other pure-function modules can
+    compute bounding boxes without duplicating the polygon-aware logic.
+    """
     if part.points:
         xs = [pt[0] for pt in part.points]
         ys = [pt[1] for pt in part.points]
         return min(xs), min(ys), max(xs), max(ys)
     hw, hh = part.width / 2, part.height / 2
     return part.x - hw, part.y - hh, part.x + hw, part.y + hh
+
+
+# Backwards-compatible alias — internal callers migrate to `part_bbox` but
+# external code that already imported the private name continues to work.
+_part_bbox = part_bbox
 
 
 def _contain(
@@ -205,7 +321,7 @@ def _contain(
     polygons move via their points. Paths pass through untouched — rewriting
     curve data is the validator's domain, not a placement snap's.
     """
-    x1, y1, x2, y2 = _part_bbox(part)
+    x1, y1, x2, y2 = part_bbox(part)
     if hx1 <= x1 and hy1 <= y1 and x2 <= hx2 and y2 <= hy2:
         return part  # already inside
     if part.kind is ShapeKind.PATH or part.kind is ShapeKind.GROUP:

@@ -23,6 +23,7 @@ import re
 from typing import Any
 
 from quorum.config.settings import Backend
+from quorum.domain.compose import place_relative
 from quorum.domain.extrude import extrude
 from quorum.domain.geometry import GeometrySpec, ShapeKind, apply_modifiers
 from quorum.domain.messages import DemoOpMessage
@@ -106,19 +107,48 @@ _UNDO_RE = re.compile(
     | \bscratch\s+that\b                 # "scratch that"
     | \bnever\s*mind\b                   # "never mind" / "nevermind"
     | \bzoom\s+(?:back\s+)?out\b         # "zoom out" / "zoom back out"
-    | \b(?:go\s+back\s+to\s+the\s+)?
-      previous\s+(?:one|version|situation|step|state)\b
-                                         # "previous one/version/…"
+    | \bback\s+to\s+the\s+(?:previous|last|prior)\b
+                                         # "back to the last one" (no "go")
+    | \b(?:the\s+)?(?:previous|last|prior)\s+
+      (?:one|version|situation|step|state|iteration)s?\b
+                                         # "previous iteration", "last one", …
     """,
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Bare nav-noun forms of the vocabulary above ("the last one", "previous
+# iteration"). When a PRUNE verb is present ("delete the last one") these are
+# a deletion target, not a go-back — branch 0 must yield to the prune branch.
+_UNDO_NAV_ONLY_RE = re.compile(
+    r"""
+    \bback\s+to\s+the\s+(?:previous|last|prior)\b
+    | \b(?:the\s+)?(?:previous|last|prior)\s+
+      (?:one|version|situation|step|state|iteration)s?\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_UNDO_EXPLICIT_RE = re.compile(
+    r"\bundo\b|\bgo\s+back\b|\brevert\b|\bscratch\s+that\b"
+    r"|\bnever\s*mind\b|\bzoom\s+(?:back\s+)?out\b",
+    re.IGNORECASE,
+)
+
+# Generic navigation words: in "go back to the previous iteration" / "back to
+# the last one" they name a POSITION in history, never a node. They must be
+# invisible to the directed-guard's label/shape resolution so a stem-collision
+# (e.g. "state" ↔ a node labelled "star") can't hijack an UNDO into a dead end.
+_UNDO_NAV_WORDS_RE = re.compile(
+    r"\b(?:previous|last|prior|iteration|iterations|one|ones|version|versions|"
+    r"situation|step|steps|state|states)\b",
+    re.IGNORECASE,
+)
+
 # Phrases that ARE undo-like but contain a resolvable label/shape reference
-# ("go back to the cat") — the guard below checks for these so we can fall
-# through to existing FOCUS/label-resolution branches.  The guard fires only
+# ("go back to the cat") — the guard below checks for these so we can emit a
+# directed FOCUS on the resolved node instead of UNDO. The guard fires only
 # when a definite reference word (after "to the …") matches a candidate node.
 _UNDO_TO_RE = re.compile(
-    r"\bgo\s+back\s+to\s+(?:the|this|that)\b",
+    r"\b(?:go\s+)?back\s+to\s+(?:the|this|that)\b",
     re.IGNORECASE,
 )
 
@@ -155,9 +185,11 @@ _KNOWN_WORDS: frozenset[str] = frozenset(
     | {w for phrase, _ in _PREFERENCE_PHRASES for w in phrase.replace("'", " ").split()}
     | {"remove", "delete", "scrap", "discard", "prune", "connect", "link", "attach", "radius"}
     | {"undo", "revert", "scratch", "nevermind", "previous", "situation", "step", "state", "zoom"}
+    | {"last", "prior", "iteration", "iterations"}  # §14 go-back nav vocabulary
     | set(NAMED_SHAPES)          # R4: named-shape words are known vocabulary
     | {w + "s" for w in NAMED_SHAPES}   # R4: plurals ("hexagons", "arrows", …)
     | {"some"}  # common quantifier often paired with shape words
+    | {"behind", "beside"}       # spatial compose words not already in _STOPWORDS
 )
 
 # Regex that matches any named-shape word (R4 named-geometry tier).
@@ -193,6 +225,47 @@ _EXTEND_RE = re.compile(
     r"\b(add|put|place|insert|attach|stick|mount|embed)\b"
     r"|\b(inside|into|within|onto|on top of|in front of|behind)\b"
 )
+
+
+# Spatial-relation words that introduce a COMPOSE operation: a NEW shape placed
+# relative to an EXISTING node.  The superset of _STACK_RE + _BELOW_RE + _INSIDE_RE,
+# extended with left/right/behind/beside.
+_COMPOSE_SPATIAL_RE = re.compile(
+    r"\babove\b|\bover\b|\bon\s+top(?:\s+of)?\b"
+    r"|\bbelow\b|\bunder(?:neath)?\b|\bbeneath\b"
+    r"|\bbeside\b|\bnext\s+to\b"
+    r"|\bto\s+the\s+left(?:\s+of)?\b|\bleft\s+of\b"
+    r"|\bto\s+the\s+right(?:\s+of)?\b|\bright\s+of\b"
+    r"|\bin\s+front(?:\s+of)?\b|\bbehind\b"
+    r"|\binside\b|\bwithin\b|\binto\b|\bonto\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_relation(lowered: str) -> str:
+    """Map a spatial preposition in *lowered* to a canonical relation name."""
+    # "on top" (with or without "of") and "onto" all mean overlapping/on_top.
+    # NOTE: '\bon\s+top\b' is placed here (not with 'above'/'over') so that
+    # "draw a box on top the horse" produces on_top (overlapping) not above (gap).
+    if re.search(r"\bon\s+top(?:\s+of)?\b|\bonto\b", lowered):
+        return "on_top"
+    if re.search(r"\babove\b|\bover\b", lowered):
+        return "above"
+    if re.search(r"\bbelow\b|\bunder\b|\bbeneath\b", lowered):
+        return "below"
+    if re.search(r"\bleft\s+of\b|\bto\s+the\s+left\b", lowered):
+        return "left"
+    if re.search(r"\bright\s+of\b|\bto\s+the\s+right\b", lowered):
+        return "right"
+    if re.search(r"\binside\b|\bwithin\b|\binto\b", lowered):
+        return "inside"
+    if re.search(r"\bbehind\b", lowered):
+        return "behind"
+    if re.search(r"\bbeside\b|\bnext\s+to\b", lowered):
+        return "right"  # default: beside = to the right
+    if re.search(r"\bin\s+front\s+of\b", lowered):
+        return "on_top"
+    return "above"  # safe fallback
 
 
 def demo_op_to_designop(msg: DemoOpMessage, utterance_id: str) -> DesignOp:
@@ -253,21 +326,45 @@ class RulesClassifier:
         # meaning; extra filler words ("I don't really like it, never mind") must
         # not reduce confidence.
         #
-        # GUARD: if the utterance contains "go back to the <X>" where <X>
-        # resolves to a known label or shape, fall through so the existing
-        # FOCUS/label-resolution branches handle it ("go back to the cat" is a
-        # FOCUS, not an UNDO).
-        if _UNDO_RE.search(lowered):
-            # Run the guard: does this look like "go back to a specific node"?
-            is_directed = False
+        # GUARD 1 (prune): the bare nav-noun forms ("the last one", "previous
+        # version") name a deletion target when a prune verb is present —
+        # "delete the last one" must reach the PRUNE branch, not fire UNDO.
+        # Explicit undo verbs ("undo", "go back", …) are immune to this guard.
+        #
+        # GUARD 2 (directed): if the utterance contains "(go) back to the <X>"
+        # where <X> resolves to a known label or shape, this is a directed
+        # focus move ("go back to the cat"), not an UNDO — emit FOCUS on the
+        # resolved node. Generic nav words (previous/last/iteration/one/…) are
+        # stripped before resolution so they can never stem-match a label and
+        # leave the utterance stranded between UNDO and FOCUS.
+        undo_hit = _UNDO_EXPLICIT_RE.search(lowered) is not None or (
+            _UNDO_NAV_ONLY_RE.search(lowered) is not None
+            and _PRUNE_RE.search(lowered) is None
+        )
+        if undo_hit:
+            directed_target: str | None = None
             if _UNDO_TO_RE.search(lowered):
-                # Check whether a label or shape word after "to the" resolves.
-                if self._resolve_by_label(lowered, context) is not None:
-                    is_directed = True
-                elif self._resolve_named(self._find_shape(lowered), context) is not None:
-                    is_directed = True
-            if not is_directed:
+                # Check whether a label or shape word after "to the" resolves —
+                # nav words are invisible to this check.
+                guard_text = _UNDO_NAV_WORDS_RE.sub(" ", lowered)
+                directed_target = self._resolve_by_label(guard_text, context)
+                if directed_target is None:
+                    directed_target = self._resolve_named(
+                        self._find_shape(guard_text), context
+                    )
+            if directed_target is None:
                 return op(op_type=OpType.UNDO, confidence=0.9)
+            # Directed go-back with NO other work attached is a plain FOCUS on
+            # the named node. If modifiers ride along ("go back to the circle
+            # and make it red") fall through so the MODIFY branches handle it
+            # — the pre-fix behavior for such phrases.
+            if not self._find_modifiers(lowered):
+                return op(
+                    op_type=OpType.FOCUS,
+                    target_node_id=directed_target,
+                    preference_signal=0.0,
+                    confidence=0.8,
+                )
 
         # 1) preference signal -> FOCUS (positive) or disaffirm (negative). If
         # the utterance *names* a shape ("go with the triangle"), resolve it
@@ -379,7 +476,28 @@ class RulesClassifier:
         # word resolves to an existing node, this MODIFY branch wins over branch 6b
         # CREATE (the named-shape tier) — so "turn this hexagon pink" MODIFIES the
         # focused hexagon node, it does NOT create a new one.
-        if modifiers:
+        #
+        # GUARD (findings 2 & 3): do NOT fire branch 4 when the utterance also
+        # contains (a) a spatial-compose preposition AND (b) a new shape mentioned
+        # with an indefinite article.  Example: "draw a red box above the horse" —
+        # the intent is to compose a new red box, not to recolor the horse node.
+        # Detection: _COMPOSE_SPATIAL_RE fires + an indefinite-article shape token
+        # is present (i.e. _find_shape returns a kind AND there is no definite
+        # determiner immediately before that shape word).
+        _branch4_compose_skip = False
+        if modifiers and _COMPOSE_SPATIAL_RE.search(lowered):
+            _b4_shape = self._find_shape(lowered)
+            if _b4_shape is not None:
+                # Check whether the shape word is preceded by an indefinite det.
+                _b4_m = _SHAPE_RE.search(lowered)
+                if _b4_m is not None:
+                    _b4_pre = lowered[max(0, _b4_m.start() - 20) : _b4_m.start()]
+                    # Indefinite: "a"/"an" precede the shape without a definite det.
+                    if re.search(r"\b(?:a|an)\b", _b4_pre) and not re.search(
+                        r"\b(?:the|this|that|my|our)\b", _b4_pre
+                    ):
+                        _branch4_compose_skip = True
+        if modifiers and not _branch4_compose_skip:
             named = self._find_definite_shape(lowered)
             target = self._resolve_named(named, context)
             # R3 / N1 label fallback: "the cube" / "this hexagon" can match a
@@ -396,18 +514,139 @@ class RulesClassifier:
 
         # 5) two or more shapes -> compose ONE scene node (group geometry).
         # "a circle with a square on top" must not collapse to a single shape.
+        #
+        # GUARD (finding 5): yield to branch 5b when one of the mentions is
+        # preceded by a definite determiner ('the', 'this', 'that', 'my', 'our')
+        # AND resolves to an existing candidate node.  Example: "draw a circle
+        # above the square" where a canvas node is labelled 'square' — the user
+        # wants compose-onto-existing, not a new two-shape group.
         mentions = self._find_shape_mentions(lowered)
         if len(mentions) >= 2 and not _CONNECT_RE.search(lowered):
-            scene = self._compose_scene(lowered, mentions)
-            is_branch = focus_node_id is not None and any(h in lowered for h in _BRANCH_HINTS)
-            return op(
-                op_type=OpType.BRANCH if is_branch else OpType.CREATE,
-                target_shape=ShapeKind.GROUP,
-                target_node_id=focus_node_id if is_branch else None,
-                modifiers=modifiers,
-                geometry=apply_modifiers(scene, modifiers),
-                confidence=_HAZY_CONFIDENCE if hazy else 0.75,
-            )
+            # Check whether any mention is a definite reference to an existing node.
+            _b5_has_definite_existing = False
+            for _b5_pos, _b5_word, _b5_kind in mentions:
+                _b5_pre = lowered[max(0, _b5_pos - 20) : _b5_pos]
+                if re.search(r"\b(?:the|this|that|my|our)\b", _b5_pre):
+                    # This mention has a definite article — check if it resolves.
+                    if self._resolve_named(_b5_kind, context) is not None:
+                        _b5_has_definite_existing = True
+                        break
+                    if self._resolve_by_label(lowered, context, definite_only=True) is not None:
+                        _b5_has_definite_existing = True
+                        break
+            if not _b5_has_definite_existing:
+                scene = self._compose_scene(lowered, mentions)
+                is_branch = focus_node_id is not None and any(h in lowered for h in _BRANCH_HINTS)
+                return op(
+                    op_type=OpType.BRANCH if is_branch else OpType.CREATE,
+                    target_shape=ShapeKind.GROUP,
+                    target_node_id=focus_node_id if is_branch else None,
+                    modifiers=modifiers,
+                    geometry=apply_modifiers(scene, modifiers),
+                    confidence=_HAZY_CONFIDENCE if hazy else 0.75,
+                )
+            # else: fall through to branch 5b (compose onto existing node)
+
+        # 5b) Compose a NEW shape ONTO an EXISTING focused node.
+        #
+        # Fires when ALL of:
+        #   (a) a spatial-relation preposition is present in the utterance,
+        #   (b) exactly ONE new shape is mentioned (two-or-more → branch 5 above),
+        #   (c) the relation target resolves to an existing node via EXPLICIT label
+        #       or definite-shape ref.  An implicit-focus fallback is allowed ONLY
+        #       when _EXTEND_RE did NOT fire — utterances like "add a red circle
+        #       inside it" are already claimed by the existing hazy-escalation path
+        #       (they need the LLM to extend the scene, not a deterministic compose).
+        #   (d) the resolved target IS the current focus and focus_geometry is
+        #       available (deterministic path); non-focus target → hazy NOOP.
+        #
+        # Does NOT fire for:
+        #   • "draw a box" (no spatial relation → _COMPOSE_SPATIAL_RE misses)
+        #   • "a circle with a square on top" (two shape mentions → branch 5 ran)
+        #   • "add a red circle inside it" (_EXTEND_RE + only implicit focus)
+        #   • "place a star on top of it" (same — extend verb + only implicit)
+        #   • no existing node + no focus (target_id stays None)
+        if _COMPOSE_SPATIAL_RE.search(lowered):
+            single_new_spec: GeometrySpec | None = None
+            # Attempt to identify exactly ONE new shape.
+            _cs = self._find_shape(lowered)
+            if _cs is not None:
+                single_new_spec = apply_modifiers(GeometrySpec(kind=_cs), modifiers)
+            else:
+                _cnm = _NAMED_SHAPE_RE.search(lowered)
+                if _cnm is not None:
+                    _cnw = _cnm.group(1)
+                    _cns = named_shape(_cnw)
+                    if _cns is not None:
+                        single_new_spec = apply_modifiers(_cns, modifiers)
+
+            if single_new_spec is not None:
+                # Resolve the target node.
+                # Priority: explicit label ref > explicit definite-shape ref.
+                # definite_only: the compose TARGET must be a definite reference
+                # ("the horse"); without this an INDEFINITE shape mention ("a
+                # line above the horse") could stem-match an existing "line" node
+                # and hijack the new create into a MODIFY of the wrong node.
+                _compose_target: str | None = self._resolve_by_label(
+                    lowered, context, definite_only=True
+                )
+                if _compose_target is None:
+                    _compose_target = self._resolve_named(
+                        self._find_definite_shape(lowered), context
+                    )
+                _explicit_target = _compose_target is not None
+                # Implicit-focus fallback: only when no extend verb is active
+                # AND the user did NOT use a definite-article reference that
+                # failed to resolve ('the window' with no window node → the
+                # user named a specific target; silently composing onto the
+                # focused node is the wrong node).
+                _extend_active = (
+                    focus_node_id is not None
+                    and _EXTEND_RE.search(lowered) is not None
+                )
+                # A definite reference that fails explicit resolution blocks
+                # the implicit fallback (finding 1 fix).
+                _definite_unresolved = (
+                    not _explicit_target
+                    and _DEFINITE_DET_RE.search(lowered) is not None
+                )
+                if (
+                    _compose_target is None
+                    and focus_node_id is not None
+                    and not _extend_active
+                    and not _definite_unresolved
+                ):
+                    _compose_target = focus_node_id
+
+                if _compose_target is not None:
+                    if (
+                        _compose_target == focus_node_id
+                        and context.focus_geometry is not None
+                    ):
+                        # Deterministic path: geometry is available right now.
+                        try:
+                            _relation = _detect_relation(lowered)
+                            _combined = place_relative(
+                                context.focus_geometry, single_new_spec, _relation
+                            )
+                        except (ValueError, Exception):
+                            # Compose failed (e.g. parts >= 60); fall through to plain CREATE.
+                            pass
+                        else:
+                            return op(
+                                op_type=OpType.MODIFY,
+                                target_node_id=_compose_target,
+                                modifiers=[],     # geometry is pre-baked — MUST be []
+                                geometry=_combined,
+                                label=None,       # child inherits parent label
+                                confidence=0.8,
+                            )
+                    elif _explicit_target:
+                        # Explicit non-focus target or focus_geometry unavailable.
+                        # Emit hazy NOOP so the cascade escalates to the LLM.
+                        # A dead/quota-exhausted LLM returns NOOP → nothing happens
+                        # (safe per fallback-inversion constraint).
+                        return op(op_type=OpType.NOOP, confidence=_HAZY_CONFIDENCE)
 
         # 6) shape word -> CREATE or BRANCH (branch when a variant is implied
         # and there is a focus to branch from).

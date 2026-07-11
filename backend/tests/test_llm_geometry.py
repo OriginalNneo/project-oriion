@@ -90,7 +90,9 @@ async def test_llm_classifier_parses_intricate_payload_via_mock() -> None:
 
     clf = LLMClassifier(backend=Backend.GROQ, model="x", api_key="k")
 
-    async def _fake_complete(text: str, context: object) -> str:
+    async def _fake_complete(
+        text: str, context: object, *, references: object = None, tier: object = None
+    ) -> str:
         return _HEART
 
     clf._complete = _fake_complete  # type: ignore[method-assign]
