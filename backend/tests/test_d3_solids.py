@@ -245,3 +245,61 @@ def test_create_with_solids_keeps_target_none() -> None:
         focus_geometry=None, focus_node_id="n5",
     )
     assert op.target_node_id is None
+
+
+def test_sphere_and_hemisphere_solids_round_trip_to_group_op() -> None:
+    """A solids list mixing box + sphere + hemisphere validates as an
+    _LLMPayload and payload_to_op projects it to ONE renderable flat GROUP —
+    the wider vocabulary rides the same path as box/cylinder/wedge."""
+    payload = _LLMPayload.model_validate(
+        {
+            "op_type": "create",
+            "target_shape": "group",
+            "confidence": 0.9,
+            "label": "snowman",
+            "solids": [
+                {"shape": "box", "x": 20, "y": 0, "z": 20, "w": 40, "d": 40, "h": 6,
+                 "color": "#9ca3af", "name": "base"},
+                {"shape": "sphere", "x": 28, "y": 6, "z": 28, "w": 24, "d": 24, "h": 24,
+                 "color": "#e5e7eb", "name": "body"},
+                {"shape": "hemisphere", "x": 32, "y": 30, "z": 32, "w": 16, "d": 16,
+                 "h": 9, "color": "#dc2626", "name": "hat"},
+            ],
+        }
+    )
+    op = _op(payload)
+    assert op.op_type is OpType.CREATE
+    assert op.geometry is not None
+    assert op.geometry.kind is ShapeKind.GROUP
+    names = [p.name or "" for p in op.geometry.parts]
+    assert "body-body" in names and "body-highlight" in names
+    assert "hat-dome" in names and "hat-highlight" in names
+    assert _all_coords_in_box(op.geometry)
+    assert SvgRenderer().render(op.geometry).startswith("<svg")
+    assert op.label == "snowman"
+
+
+def test_prompt_teaches_sphere_and_hemisphere() -> None:
+    assert "sphere" in _SYSTEM_PROMPT and "hemisphere" in _SYSTEM_PROMPT
+
+
+def test_payload_to_op_honours_max_parts() -> None:
+    """The soft parts cap flows from the classifier seam into the projection."""
+    payload = _LLMPayload.model_validate(
+        {
+            "op_type": "create",
+            "solids": [
+                {"shape": "box", "x": i * 4.0, "y": 0, "z": i * 4.0,
+                 "w": 6, "d": 6, "h": 6, "name": f"box-{i}"}
+                for i in range(25)  # 75 faces
+            ],
+        }
+    )
+    op_default = _op(payload)
+    assert op_default.geometry is not None
+    assert len(op_default.geometry.parts) <= 60
+    op_raised = payload_to_op(
+        payload, speaker_id="a", utterance_id="u1", raw_text="x", max_parts=90,
+    )
+    assert op_raised.geometry is not None
+    assert len(op_raised.geometry.parts) == 75

@@ -57,6 +57,11 @@ class DesignStateEngine:
     _ids: MonotonicCounter = field(default_factory=MonotonicCounter)
     _focus_id: str | None = None
     _seq: int = 0
+    # Chronological stack of PREVIOUS focus ids (§14 undo fallback). Maintained
+    # by _set_focus with a rule that is a pure function of the FOCUS_CHANGED
+    # event (op type + old/new focus), so from_events re-derives the identical
+    # stack — replay parity holds without new event types.
+    _focus_history: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------ #
     # Read API (no mutation)                                             #
@@ -308,40 +313,62 @@ class DesignStateEngine:
         return node_to_view(edge)
 
     def _undo(self, op: DesignOp) -> list[NodeView]:
-        """Move focus to the parent of the currently focused node (go back).
+        """Move focus one step back (§14 "go back to the previous iteration").
 
-        The abandoned child is NOT pruned — it stays ACTIVE and visible
+        Two-tier resolution:
+          1. Parent chain — if the focused node has a parent (it is an
+             iteration child), focus returns to that parent. This walks a
+             modify chain back one step at a time.
+          2. Focus history — if the focused node is a ROOT (every CREATE is a
+             root: a fresh "draw X" starts a new chain), there is no parent to
+             walk to, so focus steps back to the most recent previously
+             focused node that still exists and isn't pruned. Without this
+             fallback, "go back" after any new CREATE was a silent no-op — the
+             "still on the same iteration" bug.
+
+        The abandoned node is NOT pruned — it stays ACTIVE and visible
         (user-confirmed design: "never mind, go back" keeps the child so the
-        mind-map trunk remains intact). If focus is already at a root node (no
-        parent), this is a no-op: no event is appended, current view is returned.
+        mind-map trunk remains intact). If there is nowhere to go back to
+        (root focus + no usable history), this is a no-op: no event appended.
         """
         focus_node = self._nodes.get(self._focus_id) if self._focus_id else None
         if focus_node is None:
             return []
 
-        # Root node (no parents) — no-op: no event, return empty list so
-        # apply() still emits the current view via the final dedup pass.
-        if not focus_node.parent_ids:
-            _log.debug("undo_at_root", utterance_id=op.utterance_id)
+        target_id: str | None = None
+        if focus_node.parent_ids:
+            # Tier 1: the first parent (iteration chains are linear).
+            target_id = focus_node.parent_ids[0]
+        else:
+            # Tier 2: newest usable entry in the focus history (scan only —
+            # the stack itself is mutated by _set_focus's undo rule so replay
+            # applies the identical mutation).
+            for prev_id in reversed(self._focus_history):
+                prev = self._nodes.get(prev_id)
+                if (
+                    prev is not None
+                    and prev.status != NodeStatus.PRUNED
+                    and prev_id != self._focus_id
+                ):
+                    target_id = prev_id
+                    break
+
+        target = self._nodes.get(target_id) if target_id else None
+        if target is None:
+            _log.debug("undo_nowhere_to_go", utterance_id=op.utterance_id)
             return []
 
-        # Take the first parent as the undo target (iteration chains are linear).
-        parent_id = focus_node.parent_ids[0]
-        parent = self._nodes.get(parent_id)
-        if parent is None:
-            return []
-
-        # Move focus to the parent — _set_focus appends FOCUS_CHANGED so replay
-        # lands on the correct focus.
-        self._set_focus(parent_id, op)
+        # Move focus — _set_focus appends FOCUS_CHANGED so replay lands on the
+        # correct focus, and (op_type UNDO) pops the history through the target.
+        self._set_focus(target_id, op)
 
         # Update statuses so clients render the correct highlight state.
         # The old focus node stays ACTIVE (not pruned, not faded).
         focus_node.status = NodeStatus.ACTIVE
-        parent.status = NodeStatus.FOCUSED
+        target.status = NodeStatus.FOCUSED
 
         # Both ends of the focus move must reach clients.
-        return [node_to_view(focus_node), node_to_view(parent)]
+        return [node_to_view(focus_node), node_to_view(target)]
 
     # ------------------------------------------------------------------ #
     # Helpers                                                            #
@@ -396,12 +423,37 @@ class DesignStateEngine:
     def _set_focus(self, node_id: str | None, op: DesignOp | None) -> None:
         previous = self._focus_id
         self._focus_id = node_id
+        self._fold_focus_history(
+            new_focus=node_id,
+            previous=previous,
+            is_undo=op is not None and op.op_type == OpType.UNDO,
+        )
         self._record(
             EventType.FOCUS_CHANGED,
             op,
             None,
             payload={"focus_node_id": node_id, "previous": previous},
         )
+
+    def _fold_focus_history(
+        self, *, new_focus: str | None, previous: str | None, is_undo: bool
+    ) -> None:
+        """Maintain the §14 focus-history stack for ONE focus change.
+
+        The rule is a pure function of the FOCUS_CHANGED event so the live
+        session and from_events replay derive the identical stack:
+          * non-UNDO move: push the previous focus (a place to come back to).
+          * UNDO move to X: pop everything above and including the topmost X
+            (going back consumes the history — no bounce-back loops), and do
+            NOT push the abandoned focus.
+        """
+        if is_undo:
+            if new_focus is not None and new_focus in self._focus_history:
+                idx = len(self._focus_history) - 1 - self._focus_history[::-1].index(new_focus)
+                del self._focus_history[idx:]
+            return
+        if previous is not None and previous != new_focus:
+            self._focus_history.append(previous)
 
     def _prune_node(self, node_id: str, op: DesignOp | None) -> list[NodeView]:
         node = self._nodes.get(node_id)
@@ -502,7 +554,17 @@ class DesignStateEngine:
                 eng._nodes[ev.node.id] = ev.node.model_copy(deep=True)
             if ev.type is EventType.FOCUS_CHANGED:
                 focus = ev.payload.get("focus_node_id")
-                eng._focus_id = focus if isinstance(focus, str) else None
+                previous = ev.payload.get("previous")
+                new_focus = focus if isinstance(focus, str) else None
+                # Re-derive the §14 focus-history stack with the SAME pure rule
+                # the live _set_focus applied, so undo behaves identically
+                # after a replay.
+                eng._fold_focus_history(
+                    new_focus=new_focus,
+                    previous=previous if isinstance(previous, str) else None,
+                    is_undo=ev.op is not None and ev.op.op_type == OpType.UNDO,
+                )
+                eng._focus_id = new_focus
             eng._seq = max(eng._seq, ev.seq)
             eng._events.append(ev)
 

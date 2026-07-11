@@ -1,9 +1,9 @@
 """Deterministic isometric projection — pure 3-D solid -> 2-D GeometrySpec.
 
 Given a sequence of axis-aligned 3-D ``Solid`` primitives (box / cylinder /
-wedge), ``project_solids`` returns ONE flat isometric GROUP of polygon/ellipse/
-path parts, globally z-sorted (painter's order, far faces first) and centered
-+scaled into the 0..100 abstract box.
+wedge / sphere / hemisphere), ``project_solids`` returns ONE flat isometric
+GROUP of polygon/ellipse/path parts, globally z-sorted (painter's order, far
+faces first) and centered+scaled into the 0..100 abstract box.
 
 Design principle: "model proposes, code disposes."  An LLM supplies rough 3-D
 placement; this module does all projection math deterministically.  It is the
@@ -79,7 +79,8 @@ _FIT_HI = 92.0
 class Solid:
     """One axis-aligned 3-D primitive in a relative world space.
 
-    ``shape``: ``"box"`` | ``"cylinder"`` | ``"wedge"``.
+    ``shape``: ``"box"`` | ``"cylinder"`` | ``"wedge"`` | ``"sphere"`` |
+    ``"hemisphere"``.
     ``(x, y, z)``: the MIN corner (smallest x, y, z) in world units.
     ``(w, d, h)``: size along world x (w), world z (d), world y (h).
     Only relative positions/sizes matter — ``project_solids`` fits the whole
@@ -417,6 +418,100 @@ def _cylinder_parts(solid: Solid) -> _CylParts | None:
 
 
 # ---------------------------------------------------------------------------
+# Sphere / hemisphere parts (body ELLIPSE or dome PATH + top-left highlight)
+# ---------------------------------------------------------------------------
+
+# The projection matrix P = [[cos30, 0, -cos30], [sin30, -1, sin30]] satisfies
+# P·Pᵀ = 1.5·I, so a world sphere of radius r projects to a PERFECT circle of
+# screen radius r·√1.5 — no ellipse squash to compute.
+_SPHERE_SCREEN = math.sqrt(1.5)
+# The volumetric highlight: a smaller _L_TOP ellipse offset toward the light
+# (screen up-left), the same "light top" language the box/cylinder faces use.
+_HL_OFFSET = 0.35  # highlight center offset, fraction of the body semi-axis
+_HL_SIZE = 0.32    # highlight semi-axis, fraction of the body semi-axis
+
+
+@dataclass
+class _SphereParts:
+    """Raw (pre-fit) sphere/hemisphere geometry plus a z-sort key.
+
+    A full sphere renders as one _L_MID circle (``rx == ry_top``, ``base_ry``
+    unused); a hemisphere as a dome PATH — a top half-ellipse (semi-axes
+    ``rx`` x ``ry_top``) closed by the near half of its isometric base ellipse
+    (semi-axes ``rx`` x ``base_ry``, the cylinder-cap foreshortening). Both get
+    an _L_TOP highlight ellipse toward screen up-left.
+    """
+
+    zsort: float
+    cx: float       # projected center (sphere) / base center (hemisphere), raw
+    cy: float
+    rx: float       # horizontal semi-axis in raw screen units
+    ry_top: float   # vertical semi-axis of the body/dome above cy
+    base_ry: float  # near-base half-ellipse semi-axis below cy (hemisphere)
+    hemisphere: bool
+    fill: str
+    stroke: str
+    highlight: str
+    name_prefix: str
+
+
+def _sphere_parts(solid: Solid) -> _SphereParts:
+    """Compute raw full-sphere geometry: a circle in pre-fit screen space."""
+    x, y, z = solid.x, solid.y, solid.z
+    w, d, h = solid.w, solid.d, solid.h
+    hue, sat, _ = _base_hsl(solid.color)
+
+    # Sphere inscribed in the (w, d, h) box: mean half-extent as the radius.
+    r = (w + d + h) / 6.0
+    cx3, cy3, cz3 = x + w / 2, y + h / 2, z + d / 2
+    sx, sy = _project(cx3, cy3, cz3)
+    screen_r = r * _SPHERE_SCREEN
+
+    return _SphereParts(
+        zsort=_zsort_key(cx3, cy3, cz3),
+        cx=sx,
+        cy=sy,
+        rx=screen_r,
+        ry_top=screen_r,
+        base_ry=0.0,
+        hemisphere=False,
+        fill=_shade(hue, sat, _L_MID),
+        stroke=_shade(hue, sat, _L_STROKE),
+        highlight=_shade(hue, sat, _L_TOP),
+        name_prefix=solid.name if solid.name else "solid",
+    )
+
+
+def _hemisphere_parts(solid: Solid) -> _SphereParts:
+    """Compute raw hemisphere geometry: a dome sitting flat-side-down at y."""
+    x, y, z = solid.x, solid.y, solid.z
+    w, d, h = solid.w, solid.d, solid.h
+    hue, sat, _ = _base_hsl(solid.color)
+
+    # Base circle mirrors the cylinder cap exactly (same mean radius and √2
+    # foreshortening); the dome rises h world units, which project 1:1 to
+    # screen y, so the top arc's vertical semi-axis is simply h.
+    base_cx3, base_cy3, base_cz3 = x + w / 2, y, z + d / 2
+    sx, sy = _project(base_cx3, base_cy3, base_cz3)
+    screen_rx = (w / 2 + d / 2) * _COS30 / math.sqrt(2)
+    screen_ry = (w / 2 + d / 2) * _SIN30 / math.sqrt(2)
+
+    return _SphereParts(
+        zsort=_zsort_key(x + w / 2, y + h / 2, z + d / 2),
+        cx=sx,
+        cy=sy,
+        rx=screen_rx,
+        ry_top=h,
+        base_ry=screen_ry,
+        hemisphere=True,
+        fill=_shade(hue, sat, _L_MID),
+        stroke=_shade(hue, sat, _L_STROKE),
+        highlight=_shade(hue, sat, _L_TOP),
+        name_prefix=solid.name if solid.name else "solid",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Fit helpers (ported from scripts/make_isometric._fit / _scale_path)
 # ---------------------------------------------------------------------------
 
@@ -424,6 +519,7 @@ def _cylinder_parts(solid: Solid) -> _CylParts | None:
 def _collect_bbox(
     faces: list[_Face],
     cyls: list[_CylParts],
+    spheres: list[_SphereParts],
 ) -> tuple[float, float, float, float]:
     """Collect the bounding box of all projected geometry in raw screen coords."""
     xs: list[float] = []
@@ -439,6 +535,10 @@ def _collect_bbox(
         # body extremes
         xs += [cp.body_lx, cp.body_rx]
         ys += [cp.body_top_y, cp.body_bot_y + cp.top_ry]
+    for sp in spheres:
+        xs += [sp.cx - sp.rx, sp.cx + sp.rx]
+        # a full sphere extends ry_top both ways; a hemisphere only base_ry down
+        ys += [sp.cy - sp.ry_top, sp.cy + (sp.base_ry if sp.hemisphere else sp.ry_top)]
     if not xs:
         return 0.0, 1.0, 0.0, 1.0
     return min(xs), max(xs), min(ys), max(ys)
@@ -553,12 +653,88 @@ def _cyl_to_specs(
     return [body_spec, top_spec]
 
 
+def _sphere_to_specs(
+    sp: _SphereParts, scale: float, ox: float, oy: float
+) -> list[GeometrySpec]:
+    """Convert a _SphereParts to [body ELLIPSE|dome PATH, highlight ELLIPSE]."""
+    cx = _fx(sp.cx, scale, ox)
+    cy = _fy(sp.cy, scale, oy)
+    rx_fit = sp.rx * scale
+    ry_top_fit = sp.ry_top * scale
+    base_ry_fit = sp.base_ry * scale
+
+    if sp.hemisphere:
+        # Dome: top half-ellipse over the base, closed by the NEAR half of the
+        # isometric base ellipse (both arcs clockwise; y grows down).
+        lx = _fx(sp.cx - sp.rx, scale, ox)
+        rx_pt = _fx(sp.cx + sp.rx, scale, ox)
+        arc_rx = min((rx_pt - lx) / 2.0, 50.0)
+        arc_ry_top = min(ry_top_fit, 50.0)
+        arc_ry_base = min(base_ry_fit, 50.0)
+        d = (
+            f"M {lx:.1f} {cy:.1f} "
+            f"A {arc_rx:.1f} {arc_ry_top:.1f} 0 0 1 {rx_pt:.1f} {cy:.1f} "
+            f"A {arc_rx:.1f} {arc_ry_base:.1f} 0 0 1 {lx:.1f} {cy:.1f} Z"
+        )
+        body_spec = GeometrySpec(
+            kind=ShapeKind.PATH,
+            name=f"{sp.name_prefix}-dome",
+            d=d,
+            x=cx,
+            y=(cy - ry_top_fit + cy + base_ry_fit) / 2.0,
+            width=max(rx_fit * 2, 1.0),
+            height=max(ry_top_fit + base_ry_fit, 1.0),
+            fill=sp.fill,
+            stroke=sp.stroke,
+            fill_style=FillStyle.SOLID,
+        )
+    else:
+        body_spec = GeometrySpec(
+            kind=ShapeKind.ELLIPSE,
+            name=f"{sp.name_prefix}-body",
+            x=cx,
+            y=cy,
+            width=max(rx_fit * 2, 1.0),
+            height=max(ry_top_fit * 2, 1.0),
+            fill=sp.fill,
+            stroke=sp.stroke,
+            fill_style=FillStyle.SOLID,
+        )
+
+    # Highlight toward the light (screen up-left), inside the silhouette. On a
+    # hemisphere it sits higher up the dome so it never crosses the base line.
+    hl_dy = (0.55 if sp.hemisphere else _HL_OFFSET) * ry_top_fit
+    highlight_spec = GeometrySpec(
+        kind=ShapeKind.ELLIPSE,
+        name=f"{sp.name_prefix}-highlight",
+        x=_fx(sp.cx, scale, ox) - _HL_OFFSET * rx_fit,
+        y=_fy(sp.cy, scale, oy) - hl_dy,
+        width=max(rx_fit * 2 * _HL_SIZE, 1.0),
+        height=max(ry_top_fit * 2 * _HL_SIZE, 1.0),
+        fill=sp.highlight,
+        # The highlight is a sheen ON the body, not an outlined feature — a
+        # dark stroke here would read as an eyeball, so it strokes itself.
+        stroke=sp.highlight,
+        fill_style=FillStyle.SOLID,
+    )
+
+    return [body_spec, highlight_spec]
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-def project_solids(solids: Sequence[Solid]) -> GeometrySpec | None:
+# Default soft cap on emitted parts. Callers with access to Settings pass
+# `max_parts=settings.max_scene_parts` (env QUORUM_MAX_SCENE_PARTS) instead;
+# GeometrySpec's hard model ceiling is PARTS_HARD_MAX (domain/geometry.py).
+_DEFAULT_MAX_PARTS = 60
+
+
+def project_solids(
+    solids: Sequence[Solid], *, max_parts: int = _DEFAULT_MAX_PARTS
+) -> GeometrySpec | None:
     """Project axis-aligned solids to ONE flat isometric GROUP.
 
     The group is globally z-sorted (painter's order, far faces first), with
@@ -570,6 +746,9 @@ def project_solids(solids: Sequence[Solid]) -> GeometrySpec | None:
     solids:
         One or more ``Solid`` primitives to project.  Unknown ``shape`` values
         are silently skipped.  An empty sequence or all-unknown shapes → None.
+    max_parts:
+        Soft cap on emitted parts (default 60); an over-cap assembly keeps its
+        NEAREST whole solids. Must not exceed GeometrySpec's hard ceiling.
 
     Returns
     -------
@@ -582,6 +761,7 @@ def project_solids(solids: Sequence[Solid]) -> GeometrySpec | None:
 
     all_faces: list[_Face] = []
     all_cyls: list[_CylParts] = []
+    all_spheres: list[_SphereParts] = []
 
     for solid in solids:
         shape = solid.shape.lower()
@@ -593,42 +773,51 @@ def project_solids(solids: Sequence[Solid]) -> GeometrySpec | None:
             cp = _cylinder_parts(solid)
             if cp is not None:
                 all_cyls.append(cp)
+        elif shape == "sphere":
+            all_spheres.append(_sphere_parts(solid))
+        elif shape == "hemisphere":
+            all_spheres.append(_hemisphere_parts(solid))
         # else: unknown shape → skip gracefully
 
-    if not all_faces and not all_cyls:
+    if not all_faces and not all_cyls and not all_spheres:
         return None
 
     # --- Global z-sort: ascending key = far first (painter's order) ----------
     all_faces.sort(key=lambda f: f.zsort)
 
-    # Interleave cylinder parts at their z-sort position
-    # Build a combined sequence of (zsort, item) for faces and cylinders
-    # then sort and emit.
+    # Interleave cylinder/sphere parts at their z-sort position.
+    # Build a combined sequence of (zsort, item), then sort and emit.
     combined: list[tuple[float, object]] = [
         (f.zsort, f) for f in all_faces
     ]
     for cp in all_cyls:
         combined.append((cp.zsort, cp))
+    for sp in all_spheres:
+        combined.append((sp.zsort, sp))
     combined.sort(key=lambda t: t[0])
 
     # --- Compute fit ----------------------------------------------------------
-    x0, x1, y0, y1 = _collect_bbox(all_faces, all_cyls)
+    x0, x1, y0, y1 = _collect_bbox(all_faces, all_cyls, all_spheres)
     scale, ox, oy = _compute_fit(x0, x1, y0, y1)
 
     # --- Build parts, one CHUNK per z-sorted item ----------------------------
-    # `combined` is far→near; a face is one part, a cylinder is two (body+top).
+    # `combined` is far→near; a face is one part, a cylinder is two (body+top),
+    # a sphere/hemisphere is two (body/dome + highlight).
     chunks: list[list[GeometrySpec]] = []
     for _, item in combined:
         if isinstance(item, _Face):
             chunks.append([_face_to_spec(item, scale, ox, oy)])
         elif isinstance(item, _CylParts):
             chunks.append(_cyl_to_specs(item, scale, ox, oy))
+        elif isinstance(item, _SphereParts):
+            chunks.append(_sphere_to_specs(item, scale, ox, oy))
 
-    # GeometrySpec.parts caps at max_length=60. A >60-part assembly (≈20+
-    # solids) is pathological, but if it happens we must keep the NEAREST parts
-    # (painter's order draws near LAST) and never split a cylinder's body/top
+    # Soft parts cap (Settings.max_scene_parts at the pipeline seam). An
+    # over-cap assembly (≈20+ solids at the default 60) is pathological, but if
+    # it happens we must keep the NEAREST parts (painter's order draws near
+    # LAST) and never split a cylinder's body/top or a sphere's body/highlight
     # pair — so drop whole far chunks from the FRONT, not a blind tail slice.
-    while sum(len(c) for c in chunks) > 60 and len(chunks) > 1:
+    while sum(len(c) for c in chunks) > max_parts and len(chunks) > 1:
         chunks.pop(0)
 
     parts: list[GeometrySpec] = [spec for chunk in chunks for spec in chunk]

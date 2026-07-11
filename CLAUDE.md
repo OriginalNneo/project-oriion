@@ -4,6 +4,14 @@
 > You are the **architect *and* programmer** building Quorum. This file tells
 > you how to work. `plan.md` tells you what to build. `context.md` tells you
 > where things currently stand. `RULES.md` is the contract you must not break.
+>
+> **Two surfaces.** This file's directives (segment-first, latency budgets,
+> Protocol-per-stage) are written for the Python **backend** (`backend/`, the
+> pipeline + engine). There is also a **React / Vite / TypeScript frontend**
+> (`frontend/`, the ORIION hand-drawn design, plan.md §16) governed by
+> `RULES.md §4` — single WebSocket, render = pure function of broadcast state,
+> role-split Participant/Display. Its gate is `npm run typecheck && npm run
+> build` (strict TS, no unused; there are no frontend unit tests).
 
 ---
 
@@ -46,9 +54,13 @@ the main thread stays lean. Good candidates:
   window default") that returns a recommendation, not a transcript.
 
 Rules for subagents:
-- **Run subagents on Sonnet** (`model: sonnet`) — user instruction 2026-06-12.
-  The main thread stays on the session model; subagents get the cheaper/faster
-  tier. Revisit only if a subagent demonstrably needs more.
+- **Model tier by task difficulty** (user instruction 2026-07-11, supersedes the
+  2026-06-12 Sonnet-only rule). Default routine/isolated work to **Sonnet** (cheap,
+  fast). Escalate a subagent to a **stronger tier — Fable 5 or Opus — for hard
+  reasoning**: subtle semantics (e.g. undo focus-history), generation-quality work,
+  or anything where a wrong-but-plausible answer is costly. The main thread stays on
+  the session model. (Note: a Fable 5 / Opus *subagent* reasons about the code — it
+  is NOT the drawing model; the pipeline only calls OpenAI-compatible LLMs, see §6.)
 - Give each a **single, well-scoped objective** and the **interface contract**
   it must satisfy — not the whole plan.
 - Require each to return a **compact summary** (what it did, the interface, the

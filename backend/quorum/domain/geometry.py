@@ -40,6 +40,14 @@ class ShapeKind(StrEnum):
     EDGE = "edge"
 
 
+# Hard model ceiling on parts-per-group. The *working* cap is the configurable
+# soft cap (Settings.max_scene_parts, env QUORUM_MAX_SCENE_PARTS, default 60),
+# enforced by the code paths that BUILD parts (domain/parts.apply_patch,
+# domain/isometric.project_solids); pydantic Field constraints are baked at
+# class-creation time so the frozen model itself keeps a fixed safe maximum.
+PARTS_HARD_MAX = 120
+
+
 class FillStyle(StrEnum):
     """How a shape's fill is drawn (mirrors rough.js fillStyle choices)."""
 
@@ -73,7 +81,9 @@ class GeometrySpec(BaseModel):
     fill: str | None = None
     # GROUP only: the composed primitives, each positioned in the SAME 0..100
     # box (absolute coords, no nesting transforms — keeps renderers trivial).
-    parts: list[GeometrySpec] = Field(default_factory=list, max_length=60)
+    # max_length is the HARD ceiling; the configurable soft cap (default 60)
+    # lives in the parts-building code paths — see PARTS_HARD_MAX above.
+    parts: list[GeometrySpec] = Field(default_factory=list, max_length=PARTS_HARD_MAX)
     # --- IR v2 fields. All default so v1 specs validate and render unchanged.
     # Addressable part name ("screen", "home-indicator") — lets a later MODIFY
     # target one part of a scene, and gives tests/drivers a stable hook.

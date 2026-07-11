@@ -24,7 +24,7 @@ function textEl(x: number, y: number, content: string, color: string, sizePx: nu
   t.setAttribute("y", String(y + sizePx / 4)); // nudge baseline so text reads centered
   t.setAttribute("text-anchor", "middle");
   t.setAttribute("font-size", String(sizePx));
-  t.setAttribute("font-family", "ui-sans-serif, system-ui");
+  t.setAttribute("font-family", "'Architects Daughter', 'Comic Sans MS', cursive");
   t.setAttribute("fill", color);
   t.textContent = content;
   return t;
@@ -136,7 +136,7 @@ export function SketchNode({ spec, status }: { spec: GeometrySpec; status: NodeS
       t.setAttribute("y", String(sy(spec.y) + 5));
       t.setAttribute("text-anchor", "middle");
       t.setAttribute("font-size", "16");
-      t.setAttribute("font-family", "ui-sans-serif, system-ui");
+      t.setAttribute("font-family", "'Architects Daughter', 'Comic Sans MS', cursive");
       t.setAttribute("fill", color);
       t.textContent = spec.label;
       svg.appendChild(t);

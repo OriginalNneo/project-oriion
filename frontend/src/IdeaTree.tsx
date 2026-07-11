@@ -23,6 +23,7 @@ import { SketchNode } from "./SketchNode";
 import type { NodeView } from "./protocol";
 import { usePanZoom } from "./usePanZoom";
 import { ZoomControls } from "./ZoomControls";
+import { Tally } from "./ReactionMenu";
 
 const PAD = 40; // canvas padding (px)
 
@@ -195,17 +196,21 @@ function NodeCard({
       {sketching && focused && (
         <div className="sketch-badge">sketching…</div>
       )}
+      {/* ORIION status chip: the focused card is the CURRENT branch; pruned
+          branches are marked red (the wireframe's saved/rejected vocabulary). */}
+      {focused && <div className="mm-label lab-current">CURRENT</div>}
+      {!focused && node.status === "pruned" && <div className="mm-label lab-red">Pruned</div>}
       {node.label && <div className="node-title">{node.label}</div>}
       <div className="node-canvas">
         <SketchNode spec={node.geometry} status={node.status} />
       </div>
       <div className="node-meta">
-        {node.suggested_by && <span className="chip">suggested by {node.suggested_by}</span>}
+        {node.suggested_by && <span className="suggested-by">by {node.suggested_by}</span>}
         {node.affirmation_score > 0.01 && (
-          <span className="chip score">★ {node.affirmation_score.toFixed(1)}</span>
+          <Tally kind="matches" text={node.affirmation_score.toFixed(1)} />
         )}
         {node.affirmation_score < -0.01 && (
-          <span className="chip score">▽ {node.affirmation_score.toFixed(1)}</span>
+          <Tally kind="wrong" text={node.affirmation_score.toFixed(1)} />
         )}
       </div>
     </div>
@@ -290,7 +295,8 @@ export function IdeaTree({ big = false }: { big?: boolean }) {
     return p ? [p.x + cw / 2, p.y + ch / 2] : null;
   };
 
-  // Derivation edges.
+  // Derivation edges. Edge strokes are SVG attributes (CSS vars don't apply) —
+  // hex literals below are tuned for the galaxy (#0c0d12) canvas.
   const derivations: { from: Placed; to: Placed; dimmed: boolean }[] = [];
   for (const p of placed.values()) {
     for (const pid of p.node.parent_ids) {
@@ -331,8 +337,18 @@ export function IdeaTree({ big = false }: { big?: boolean }) {
       {cards.length === 0 ? (
         // Empty state centered within the full scroll container (risk #22).
         <div className="empty">
-          <p>No ideas yet.</p>
-          <p className="hint">Speak a shape — "a rectangle with a fillet" — to begin.</p>
+          <div className="empty-card">
+            <div className="empty-mark" aria-hidden="true">
+              <svg viewBox="0 0 64 64" width="64" height="64">
+                <circle cx="32" cy="32" r="22" fill="none" stroke="#c9cad6" strokeWidth="2.4" strokeDasharray="4 6" />
+                <path d="M22 34c4 5 16 5 20 0" fill="none" stroke="#c9cad6" strokeWidth="2.4" strokeLinecap="round" />
+                <circle cx="25" cy="27" r="2" fill="#c9cad6" />
+                <circle cx="39" cy="27" r="2" fill="#c9cad6" />
+              </svg>
+            </div>
+            <p className="empty-title">No ideas yet</p>
+            <p className="hint">Speak a shape — “a rectangle with a fillet” — to begin.</p>
+          </div>
         </div>
       ) : (
         // .idea-viewport wraps .idea-canvas and receives the CSS transform.
@@ -359,9 +375,10 @@ export function IdeaTree({ big = false }: { big?: boolean }) {
                     key={`${from.node.id}->${to.node.id}`}
                     d={`M ${x0} ${y0} C ${mx} ${y0}, ${mx} ${y1}, ${x1} ${y1}`}
                     fill="none"
-                    stroke={dimmed ? "#334155" : "#64748b"}
-                    strokeWidth={2}
+                    stroke={dimmed ? "#3a3c47" : "#adb0c4"}
+                    strokeWidth={dimmed ? 2 : 2.4}
                     strokeDasharray={dimmed ? "4 6" : undefined}
+                    strokeLinecap="round"
                   />
                 );
               })}
@@ -377,7 +394,7 @@ export function IdeaTree({ big = false }: { big?: boolean }) {
                       y1={a[1]}
                       x2={b[0]}
                       y2={b[1]}
-                      stroke="#38bdf8"
+                      stroke="#5b8def"
                       strokeWidth={2}
                       strokeDasharray="8 6"
                     />
@@ -386,7 +403,7 @@ export function IdeaTree({ big = false }: { big?: boolean }) {
                         x={(a[0] + b[0]) / 2}
                         y={(a[1] + b[1]) / 2 - 6}
                         textAnchor="middle"
-                        fill="#38bdf8"
+                        fill="#5b8def"
                         fontSize={13}
                       >
                         {e.label}
