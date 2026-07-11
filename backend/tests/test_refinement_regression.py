@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import json
 
-from quorum.domain.geometry import ShapeKind
+from quorum.domain.geometry import GeometrySpec, ShapeKind
 from quorum.domain.isometric import Solid, project_solids
-from quorum.eval.adherence import NAMED_COLORS
+from quorum.eval.adherence import NAMED_COLORS, Expectation, score
 from quorum.eval.battery import ALL, HELDOUT, SETS, TUNING
 from quorum.pipeline.llm import (
     _LLMPayload,
@@ -366,8 +366,6 @@ def test_seg3_early_simple_counted_primitives_score_exact_count() -> None:
     # (no nested-group name multiplication), so the scorer's count dimension is
     # 1.0. This is the whole point of the "one simple primitive per counted item"
     # steer — the drawing carries precisely N countable leaf parts.
-    from quorum.eval.adherence import Expectation, score
-
     payload = _parse_and_repair(_group_payload(_counted_scene(4)))
     assert payload is not None
     assert _part_names(payload) == [
@@ -442,3 +440,77 @@ def test_seg1_invalid_target_shape_word_degrades_to_none() -> None:
     assert payload.target_shape is None
     op = payload_to_op(payload, speaker_id="p", utterance_id="u", raw_text="a 3D sphere")
     assert op.geometry is not None and op.geometry.kind is ShapeKind.GROUP
+
+
+# --------------------------------------------------------------------------- #
+# scorer-v2 (counted DISTINCT connected features): the count dimension used to
+# tally every PART whose name carries the role word, double-counting any
+# multi-part feature (a wheel = tyre + hub, an antenna = rod + tip, a wheel + its
+# touching wheel-well). The model DREW THE RIGHT NUMBER; the scorer miscounted.
+# The count is now the number of connected COMPONENTS among the role-matching
+# parts (same touching-bbox union-find as coherence). Lock the corrected
+# semantics: touching sub-parts collapse to one feature, spaced features stay
+# separate. The rule is general — no per-feature carve-out.
+# --------------------------------------------------------------------------- #
+def _rect(name: str, x: float, y: float, w: float, h: float) -> GeometrySpec:
+    return GeometrySpec(kind=ShapeKind.RECTANGLE, name=name, x=x, y=y, width=w, height=h)
+
+
+def _grp(*parts: GeometrySpec) -> GeometrySpec:
+    return GeometrySpec(kind=ShapeKind.GROUP, parts=list(parts))
+
+
+def test_scorerv2_multipart_antennas_count_as_two() -> None:
+    # Two SPACED antennas, each drawn as a touching rod + tip (4 role-named parts).
+    # Old scorer: 4/2 -> 0.0. scorer-v2: 2 connected features -> 2/2 -> 1.00.
+    geom = _grp(
+        _rect("antenna-1-rod", 40, 40, 2, 20),  # bbox 39..41 x, 30..50 y
+        _rect("antenna-1-tip", 40, 28, 6, 6),   # bbox 37..43 x, 25..31 y (touches rod)
+        _rect("antenna-2-rod", 60, 40, 2, 20),  # bbox 59..61 x
+        _rect("antenna-2-tip", 60, 28, 6, 6),   # bbox 57..63 x (14-unit gap from antenna-1)
+    )
+    result = score(geom, Expectation(counts={"antenna": 2}))
+    assert result.count == 1.0
+    assert any("2 features" in n and "4 parts" in n for n in result.notes)
+
+
+def test_scorerv2_four_spaced_wheels_count_each() -> None:
+    # Four genuinely-separate wheels stay counted as 4 (the rule must not merge
+    # spaced features). Centers 20 units apart, width 10 -> 10-unit gaps.
+    geom = _grp(*[_rect(f"wheel-{i + 1}", 20.0 + 20.0 * i, 70, 10, 10) for i in range(4)])
+    result = score(geom, Expectation(counts={"wheel": 4}))
+    assert result.count == 1.0
+
+
+def test_scorerv2_wheel_and_touching_well_count_one() -> None:
+    # A wheel and its touching wheel-well arch BOTH match "wheel"; they are one
+    # feature, so the drawing has ONE wheel, not two. Old scorer: 2/1 -> 0.0.
+    geom = _grp(
+        _rect("wheel-front", 30, 70, 10, 10),      # bbox 25..35 x, 65..75 y
+        _rect("wheel-front-well", 30, 63, 12, 8),  # bbox 24..36 x, 59..67 y (touches wheel)
+    )
+    result = score(geom, Expectation(counts={"wheel": 1}))
+    assert result.count == 1.0
+
+
+def test_scorerv2_separated_windows_unchanged() -> None:
+    # Two SEPARATED windows are two features, exactly as before scorer-v2.
+    geom = _grp(
+        _rect("window-left", 30, 50, 8, 8),   # bbox 26..34
+        _rect("window-right", 70, 50, 8, 8),  # bbox 66..74 (far apart)
+    )
+    result = score(geom, Expectation(counts={"window": 2}))
+    assert result.count == 1.0
+
+
+def test_scorerv2_single_feature_three_touching_subparts_counts_one() -> None:
+    # One engine drawn as three CHAIN-touching sub-parts (block-pipe-cap) is ONE
+    # feature. Each part touches the next so union-find yields exactly 1 component.
+    geom = _grp(
+        _rect("engine-block", 40, 50, 20, 20),  # bbox 30..50 x
+        _rect("engine-pipe", 58, 50, 16, 6),    # bbox 50..66 x (touches block at 50)
+        _rect("engine-cap", 72, 50, 12, 12),    # bbox 66..78 x (touches pipe at 66)
+    )
+    result = score(geom, Expectation(counts={"engine": 1}))
+    assert result.count == 1.0
+    assert any("1 features" in n and "3 parts" in n for n in result.notes)

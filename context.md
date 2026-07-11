@@ -214,6 +214,39 @@ Then back to the standing queue (§4): browser live-confirm, Phase 1b server STT
 
 ## 3. What's done
 _(append-only-ish; newest at top)_
+- **Refinement loop — Segment 4: scorer-v2 (distinct-feature counts) → STOP GATE
+  MET — DONE (2026-07-12, branch drawing-quality-d3; OPUS fixer; ruff + mypy
+  strict, 704 tests, self-test 9/9, +5 `test_scorerv2_*` guards).** The count
+  dimension was a genuine MEASUREMENT bug: it counted every PART whose name held
+  the role substring, so a 2-antenna robot drawn as 2×(tip+rod) counted 4/2 → 0.0
+  though the model drew the right number. Fix (`quorum/eval/adherence.py`
+  `_score_counts`, user-authorized instrument correction): NEW
+  `_connected_components` (factored from `_score_coherence`'s union-find) — count
+  DISTINCT connected features (cluster role-matching parts by touching bbox, minus
+  backgrounds). Fully general, no per-feature carve-out; genuinely-separate
+  features (spaced windows/wheels/thrusters) still count exactly as before.
+  Updated `test_adherence.py` + the keyless self-test to the corrected semantics
+  (kept a genuinely-wrong `window:5` guard so it still fails a real miscount).
+  - **Verified INDEPENDENTLY (re-baseline under scorer-v2, held-out ×5):** HELDOUT
+    strict **0.919 median** (0.919×4 + one 0.869 coffee-cup dip; mean 0.909) —
+    **≥ 0.90 stop gate MET**; TUNING strict **0.958**. Integrity checks all pass:
+    robot-head rose 0.50→1.00 for the RIGHT reason (`2 features (4 parts) → 2/2`);
+    "a car with four wheels" correctly STAYS 0.75 (the model draws a SIDE-VIEW car
+    — front/rear wheels at identical coords → only 2 distinct wheel positions, a
+    fair penalty, NOT a scorer merge bug — subagent geometry-probed and confirmed);
+    house 2 windows / funnel 5 thrusters / face 2 eyes UNCHANGED at 1.0.
+  - **Honest framing of the number:** the model's true drawing quality was improved
+    by Seg 1–3 (real bugs: 3D-solids emission, truncation, counted-feature ref
+    over-injection) lifting held-out 0.567 → 0.869 under scorer-v1. Seg 4 corrected
+    a count MEASUREMENT bug that was under-crediting correct drawings, re-baselining
+    held-out to **0.919** under a correct scorer. Both are legitimate; the 0.90+ is
+    meaningful, not gamed (the frozen-battery discipline held throughout — no
+    expectation was edited to cross the gate).
+  - **LOOP TARGET REACHED (held-out median ≥ 0.90). Remaining honest headroom
+    (optional): coffee-cup 0.44 (detached handle → coherence 0.0 + min_parts sparse)
+    and the side-view car (a real model limitation).** Files:
+    `quorum/eval/adherence.py`, `tests/test_adherence.py`, `scripts/eval_adherence.py`
+    (self-test), `tests/test_refinement_regression.py`.
 - **Refinement loop — Segment 3: scene completeness (counted-feature refs) — DONE
   (2026-07-12, branch drawing-quality-d3; OPUS fixer subagent per user directive;
   ruff + mypy strict, 699 tests, +4 keyless `test_seg3_*` guards).** Root cause of

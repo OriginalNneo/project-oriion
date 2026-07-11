@@ -218,17 +218,56 @@ def _color_matches(part: GeometrySpec, target_hex: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Per-dimension scorers (each appends a human-readable note)
 # --------------------------------------------------------------------------- #
+def _connected_components(boxes: list[tuple[float, float, float, float]]) -> int:
+    """Number of connected components among ``boxes`` under :func:`_boxes_touch`.
+
+    Same union-find as :func:`_score_coherence`, factored out so counting can
+    reuse the exact touching rule. An empty list is 0 components; a single box
+    is its own component.
+    """
+    n = len(boxes)
+    if n <= 1:
+        return n
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _boxes_touch(boxes[i], boxes[j]):
+                parent[find(i)] = find(j)
+    return len({find(i) for i in range(n)})
+
+
 def _score_counts(
     parts: list[GeometrySpec], counts: Mapping[str, int], notes: list[str]
 ) -> float | None:
+    """Score the NUMBER of each named feature — by distinct connected features.
+
+    A single feature is often drawn as several touching parts that all carry the
+    role word (an antenna = rod + tip, a wheel = tyre + hub, a wheel + its
+    wheel-well arch). Counting raw name matches double-counts those. So the
+    role-matching parts are clustered by touching bbox (the same union-find as
+    :func:`_score_coherence`, minus any near-full-canvas background) and ``actual``
+    is the number of connected COMPONENTS: a lone match is its own feature, a
+    touching tip+rod is one. Genuinely separate features (spaced windows, spaced
+    wheels, five thrusters) still count exactly as before.
+    """
     scores: list[float] = []
     for role, expected in counts.items():
         if expected <= 0:
             continue
-        actual = sum(1 for p in parts if p.name and role.lower() in p.name.lower())
+        matches = [p for p in parts if p.name and role.lower() in p.name.lower()]
+        boxes = [b for b in (_bbox(p) for p in matches) if not _is_background(b)]
+        actual = _connected_components(boxes)
         s = max(0.0, 1.0 - abs(actual - expected) / expected)
         scores.append(s)
-        notes.append(f"count[{role}]: {actual}/{expected} -> {s:.2f}")
+        extra = f" ({len(matches)} parts)" if len(matches) != actual else ""
+        notes.append(f"count[{role}]: {actual} features{extra} -> {actual}/{expected} -> {s:.2f}")
     return mean(scores) if scores else None
 
 

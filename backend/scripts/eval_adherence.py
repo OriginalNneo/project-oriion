@@ -172,6 +172,20 @@ def _self_test() -> int:
     wc = score(house, Expectation(counts={"window": 5}))
     checks.append(("count 2/5 partial-credit < 1", wc.count is not None and wc.count < 1.0))
 
+    # scorer-v2: a multi-part feature (each antenna = touching rod + tip) counts
+    # ONCE per connected component, not per part. Two spaced antennas, each drawn
+    # as a touching rod+tip pair (4 parts), must score 2/2 = 1.0 — the substring
+    # count would over-count to 4/2 and score 0.0.
+    def _r(name: str, x: float, y: float, w: float, h: float) -> GeometrySpec:
+        return GeometrySpec(kind=ShapeKind.RECTANGLE, name=name, x=x, y=y, width=w, height=h)
+
+    antennas = GeometrySpec(kind=ShapeKind.GROUP, parts=[
+        _r("antenna-1-rod", 40, 40, 2, 20), _r("antenna-1-tip", 40, 28, 6, 6),
+        _r("antenna-2-rod", 60, 40, 2, 20), _r("antenna-2-tip", 60, 28, 6, 6),
+    ])
+    ac = score(antennas, Expectation(counts={"antenna": 2}))
+    checks.append(("two multi-part antennas count as 2 features (v2)", ac.count == 1.0))
+
     miscolor = score(house, Expectation(colors=("orange",)))
     checks.append(("absent color scores 0", miscolor.color == 0.0))
 

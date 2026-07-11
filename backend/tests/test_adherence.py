@@ -187,15 +187,16 @@ def test_empty_expectation_group_all_touching_overall_1() -> None:
 
 
 def test_count_exact_match() -> None:
-    parts = [_rect(name="thruster-1"), _rect(name="thruster-2")]
+    # Two SPACED thrusters — distinct connected features → counts 2.
+    parts = [_rect(name="thruster-1", x=20.0), _rect(name="thruster-2", x=80.0)]
     geom = _group(*parts)
     result = score(geom, Expectation(counts={"thruster": 2}))
     assert result.count == 1.0
 
 
 def test_count_off_by_one_above() -> None:
-    # Expected 5, have 4 → score = 1 - 1/5 = 0.8
-    parts = [_rect(name=f"thruster-{i}") for i in range(4)]
+    # Expected 5, have 4 SPACED (distinct) thrusters → score = 1 - 1/5 = 0.8
+    parts = [_rect(name=f"thruster-{i}", x=float(15 + 25 * i), w=6.0) for i in range(4)]
     geom = _group(*parts)
     result = score(geom, Expectation(counts={"thruster": 5}))
     assert result.count is not None
@@ -203,8 +204,8 @@ def test_count_off_by_one_above() -> None:
 
 
 def test_count_off_by_one_below() -> None:
-    # Expected 5, have 6 → score = 1 - 1/5 = 0.8
-    parts = [_rect(name=f"thruster-{i}") for i in range(6)]
+    # Expected 5, have 6 SPACED (distinct) thrusters → score = 1 - 1/5 = 0.8
+    parts = [_rect(name=f"thruster-{i}", x=float(8 + 15 * i), w=6.0) for i in range(6)]
     geom = _group(*parts)
     result = score(geom, Expectation(counts={"thruster": 5}))
     assert result.count is not None
@@ -213,7 +214,7 @@ def test_count_off_by_one_below() -> None:
 
 def test_count_2_of_5_partial_credit() -> None:
     # formula: max(0, 1 - |actual-expected| / expected) = 1 - |2-5|/5 = 0.4
-    parts = [_rect(name=f"thruster-{i}") for i in range(2)]
+    parts = [_rect(name=f"thruster-{i}", x=float(20 + 40 * i), w=6.0) for i in range(2)]
     geom = _group(*parts)
     result = score(geom, Expectation(counts={"thruster": 5}))
     assert result.count is not None
@@ -243,25 +244,25 @@ def test_count_empty_counts_is_none() -> None:
 
 
 def test_count_case_insensitive_match() -> None:
-    # "thruster-1" matches role "Thruster"
-    geom = _group(_rect(name="thruster-1"), _rect(name="THRUSTER-2"))
+    # "thruster-1" matches role "Thruster"; SPACED so they're 2 distinct features.
+    geom = _group(_rect(name="thruster-1", x=20.0), _rect(name="THRUSTER-2", x=80.0))
     result = score(geom, Expectation(counts={"Thruster": 2}))
     assert result.count == 1.0
 
 
 def test_count_substring_match() -> None:
-    # "forward-thruster" contains "thruster"
-    geom = _group(_rect(name="forward-thruster"), _rect(name="rear-thruster"))
+    # "forward-thruster" contains "thruster"; SPACED → 2 distinct features.
+    geom = _group(_rect(name="forward-thruster", x=20.0), _rect(name="rear-thruster", x=80.0))
     result = score(geom, Expectation(counts={"thruster": 2}))
     assert result.count == 1.0
 
 
 def test_count_multi_role_averaged() -> None:
-    # 2 thrusters (expected 2 → 1.0) + 1 window (expected 2 → 0.5) → mean = 0.75
+    # 2 SPACED thrusters (expected 2 → 1.0) + 1 window (expected 2 → 0.5) → mean = 0.75
     parts = [
-        _rect(name="thruster-1"),
-        _rect(name="thruster-2"),
-        _rect(name="window-1"),
+        _rect(name="thruster-1", x=15.0),
+        _rect(name="thruster-2", x=85.0),
+        _rect(name="window-1", x=50.0),
     ]
     geom = _group(*parts)
     result = score(geom, Expectation(counts={"thruster": 2, "window": 2}))
@@ -746,10 +747,14 @@ def test_overall_single_dim_equals_that_dim() -> None:
 
 
 def test_overall_mean_of_applicable_dims() -> None:
-    # count=1.0, coherence=1.0 → overall=1.0
-    # Make parts touch: eye-left bbox 30..50, eye-right bbox 50..70 (shared edge)
-    geom = _group(_rect(name="eye-left", x=40.0, y=50.0, w=20.0, h=10.0),
-                  _rect(name="eye-right", x=60.0, y=50.0, w=20.0, h=10.0))
+    # count=1.0, coherence=1.0 → overall=1.0. The two eyes are SPACED (distinct
+    # features → count 2), but a bridging head keeps the scene one connected body
+    # (coherence 1.0) — the two dimensions no longer trade off against each other.
+    geom = _group(
+        _rect(name="head", x=50.0, y=50.0, w=40.0, h=20.0),
+        _rect(name="eye-left", x=35.0, y=50.0, w=14.0, h=10.0),   # bbox 28..42
+        _rect(name="eye-right", x=65.0, y=50.0, w=14.0, h=10.0),  # bbox 58..72
+    )
     result = score(geom, Expectation(counts={"eye": 2}))
     assert result.count == 1.0
     assert result.coherence == 1.0
@@ -903,14 +908,16 @@ def test_coherence_ignores_full_canvas_background() -> None:
 
 
 def test_count_skipped_on_solids_payload() -> None:
-    # Projected solids decompose "piston-1" into "piston-1-body" + "piston-1-top",
-    # so role-substring counting over-counts; the solids path skips count entirely.
+    # Projected solids decompose "piston-1" into "piston-1-body" + "piston-1-top";
+    # the solids path skips count entirely (the payload_kind guard).
     proj = project_solids([Solid("cylinder", 20, 0, 20, 12, 12, 20, "#9ca3af", "piston-1")])
     assert proj is not None
     assert score(proj, Expectation(counts={"piston": 1}), payload_kind="solids").count is None
-    # Same geometry WITHOUT the solids hint over-counts (the bug being guarded).
+    # scorer-v2 makes that belt-and-suspenders: even WITHOUT the hint the two faces
+    # of the single solid TOUCH, so connected-feature counting clusters them into
+    # one piston (1/1 -> 1.0) instead of the old substring double-count (2/1 -> 0).
     nohint = score(proj, Expectation(counts={"piston": 1}))
-    assert nohint.count is not None and nohint.count < 1.0
+    assert nohint.count == 1.0
 
 
 def test_solids3d_ignores_near_white_background() -> None:
